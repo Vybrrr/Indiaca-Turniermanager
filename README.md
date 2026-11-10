@@ -1,2 +1,2 @@
 # Indiaca-Turniermanager
-Management for Indiaca Tournaments
+Management for Team Tournaments like Volleyball or Indiaca!
