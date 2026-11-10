@@ -243,12 +243,6 @@
             return `
                 <header class="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 px-6 py-4 flex justify-between items-center shadow-sm w-full">
                     <div class="flex items-center gap-3">
-                        ${renderThemeToggle()}
-                        <button onclick="goToClubsAndTeams()" class="px-3 py-2 text-sm bg-brand-50 dark:bg-gray-700 text-brand-600 dark:text-brand-400 font-medium rounded-xl">Vereine & Teams</button>
-                        <button onclick="goToProfile()" class="px-3 py-2 text-sm bg-gray-100 dark:bg-gray-700 rounded-xl">Profil</button>
-                        <button onclick="logout()" class="px-3 py-2 text-sm text-red-600">Abmelden</button>
-                    </div>
-                    <div class="flex items-center gap-3">
                         <div class="w-10 h-10 rounded-full bg-gray-100 dark:bg-gray-700 overflow-hidden border flex items-center justify-center">
                             ${state.currentUser.avatar}
                         </div>
@@ -259,6 +253,7 @@
                     </div>
                     <div class="flex items-center gap-3">
                         ${renderThemeToggle()}
+                        <button onclick="goToClubsAndTeams()" class="px-3 py-2 text-sm bg-brand-50 dark:bg-gray-700 text-brand-600 dark:text-brand-400 font-medium rounded-xl">Vereine & Teams</button>
                         <button onclick="goToProfile()" class="px-3 py-2 text-sm bg-gray-100 dark:bg-gray-700 rounded-xl">Profil</button>
                         <button onclick="logout()" class="px-3 py-2 text-sm text-red-600">Abmelden</button>
                     </div>
