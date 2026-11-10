@@ -295,9 +295,13 @@
 
         // --- 3. CONTROLLER ACTIONS ---
         async function loginWithGoogle() {
-            await supabaseClient.auth.signInWithOAuth({ provider: 'google' });
+            await supabaseClient.auth.signInWithOAuth({ 
+            provider: 'google',
+            options: {
+                redirectTo: window.location.origin + window.location.pathname
+            }
+        });
         }
-
         async function logout() {
             await supabaseClient.auth.signOut();
             state.currentUser = null;
