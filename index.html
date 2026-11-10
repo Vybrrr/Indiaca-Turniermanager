@@ -331,28 +331,66 @@
         }
 
         async function handleSaveTournament(e, id) {
-            e.preventDefault();
-            const name = document.getElementById('t-name').value;
-            const address = document.getElementById('t-address').value;
-            const details = document.getElementById('t-details').value;
+             e.preventDefault();
+             const name = document.getElementById('t-name').value;
+             const address = document.getElementById('t-address').value;
+             const details = document.getElementById('t-details').value;
 
-            if (id) {
-                await supabaseClient.from('tournaments').update({ name, address, details }).eq('id', id);
-            } else {
-                await supabaseClient.from('tournaments').insert([{ 
-                    name, address, details, created_by: state.currentUser.id, admins: [state.currentUser.email] 
-                }]);
-            }
-            await loadTournaments();
-            goToMain();
+             if (id) {
+                 await supabaseClient.from('tournaments').update({ name, address, details }).eq('id', id);
+             } else {
+                 await supabaseClient.from('tournaments').insert([{ 
+                     name, address, details, created_by: state.currentUser.id, admins: [state.currentUser.email] 
+                 }]);
+             }
+                await loadTournaments();
+                goToMain();
         }
 
         function openModal(type) {
             document.getElementById('modal-container').classList.remove('hidden');
             document.getElementById('modal-content').innerHTML = type === 'privacy' ? '<h3>Datenschutz</h3>' : '<h3>Impressum</h3>';
         }
+    
         function closeModal() { document.getElementById('modal-container').classList.add('hidden'); }
 
+// --- REGISTRIERUNG (Neues Konto anlegen) ---
+        async function registerWithEmail(email, password) {
+            const { data, error } = await supabaseClient.auth.signUp({
+                email: email,
+                password: password,
+                options: {
+                    emailRedirectTo: window.location.origin + window.location.pathname
+                }
+            });
+
+            if (error) {
+                console.error("Fehler bei der Registrierung:", error.message);
+                alert("Registrierung fehlgeschlagen: " + error.message);
+                return;
+            }
+
+            alert("Registrierung erfolgreich! Bitte prüfe ggf. dein Postfach oder logge dich direkt ein.");
+                return data;
+        }
+
+// --- ANMELDUNG (Bestehendes Konto einloggen) ---
+async function loginWithEmail(email, password) {
+    const { data, error } = await supabaseClient.auth.signInWithPassword({
+        email: email,
+        password: password
+    });
+
+    if (error) {
+        console.error("Fehler beim Login:", error.message);
+        alert("Login fehlgeschlagen: " + error.message);
+        return;
+    }
+
+    console.log("Erfolgreich eingeloggt:", data.user);
+    // Hier kannst du die Seite neu laden oder die UI umschalten
+    window.location.reload(); 
+}
         window.addEventListener('DOMContentLoaded', initApp);
     </script>
 </body>
