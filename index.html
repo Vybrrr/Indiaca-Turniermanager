@@ -1,8 +1,8 @@
 <!-- 
     ========================================================================
-    VERSION: 4
-    PROJEKT: Indiaca Turnier Manager (Supabase Cloud Backend)
-    BESCHREIBUNG: Integration E-Mail/Passwort Auth & Google OAuth in die Render Engine
+    VERSION: 6
+    PROJEKT: Turnier & Vereinsmanager (Supabase Cloud Backend)
+    BESCHREIBUNG: Integration von Nicknames, Publish-Switches und Turnierleiter-Rolle
     ========================================================================
 -->
 <!DOCTYPE html>
@@ -10,7 +10,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Turnier Manager - v5</title>
+    <title>Turnier Manager - v6</title>
     <!-- Tailwind CSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- Supabase JS SDK -->
@@ -46,7 +46,7 @@
             <span>•</span>
             <button onclick="openModal('imprint')" class="hover:underline">Impressum</button>
             <span>•</span>
-            <span class="font-semibold text-brand-600 dark:text-brand-400">v5</span>
+            <span class="font-semibold text-brand-600 dark:text-brand-400">v6</span>
         </div>
         <p class="mt-1">© 2026 Indiaca Turnier Manager</p>
     </footer>
@@ -135,13 +135,14 @@
         async function loadUserData(authUser) {
             let { data: profile } = await supabaseClient.from('profiles').select('*').eq('id', authUser.id).single();
             if (!profile) {
-                const newProfile = { id: authUser.id, email: authUser.email, avatar_index: 0 };
-                await supabaseClient.from('profiles').insert([newProfile]);
+                const newProfile = { id: authUser.id, email: authUser.email, avatar_index: 0, nickname: authUser.email.split('@')[0] };
+                await supabaseClient.from('profiles'].insert([newProfile]);
                 profile = newProfile;
             }
             state.currentUser = {
                 id: authUser.id,
                 email: authUser.email,
+                nickname: profile.nickname || authUser.email.split('@')[0],
                 selectedAvatarIndex: profile.avatar_index || 0,
                 avatar: AVATARS[profile.avatar_index || 0]
             };
@@ -243,20 +244,21 @@
             return `
                 <header class="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 px-6 py-4 flex justify-between items-center shadow-sm w-full">
                     <div class="flex items-center gap-3">
-                        <div class="w-10 h-10 rounded-full bg-gray-100 dark:bg-gray-700 overflow-hidden border flex items-center justify-center">
-                            ${state.currentUser.avatar}
-                        </div>
-                        <div>
-                            <span class="block text-xs text-gray-500 dark:text-gray-400">Angemeldet als</span>
-                            <span class="font-semibold text-sm text-gray-800 dark:text-gray-100">${state.currentUser.email}</span>
-                        </div>
-                    </div>
-                    <div class="flex items-center gap-3">
                         ${renderThemeToggle()}
                         <button onclick="goToClubsAndTeams()" class="px-3 py-2 text-sm bg-brand-50 dark:bg-gray-700 text-brand-600 dark:text-brand-400 font-medium rounded-xl">Vereine & Teams</button>
                         <button onclick="goToProfile()" class="px-3 py-2 text-sm bg-gray-100 dark:bg-gray-700 rounded-xl">Profil</button>
                         <button onclick="logout()" class="px-3 py-2 text-sm text-red-600">Abmelden</button>
                     </div>
+                    <div class="flex items-center gap-3">
+                        <div class="w-10 h-10 rounded-full bg-gray-100 dark:bg-gray-700 overflow-hidden border flex items-center justify-center">
+                            ${state.currentUser.avatar}
+                        </div>
+                        <div>
+                            <span class="block text-xs text-gray-500 dark:text-gray-400">Angemeldet als</span>
+                            <span class="font-semibold text-sm text-gray-800 dark:text-gray-100">${state.currentUser.nickname}</span>
+                        </div>
+                    </div>
+                    
                 </header>
                 <main class="w-full mx-auto p-6 flex-grow space-y-6">
                     <div class="flex justify-between items-center">
@@ -312,8 +314,11 @@
                                 <label class="block text-xs font-semibold mb-1">Details / Beschreibung</label>
                                 <textarea id="t-details" rows="3" class="w-full px-4 py-2 border rounded-xl dark:bg-gray-700 text-sm">${isEdit ? (tournament.details || '') : ''}</textarea>
                             </div>
-                            <button type="submit" class="w-full py-3 bg-brand-600 text-white rounded-xl shadow font-medium text-sm">Speichern</button>
-                        </form>
+                            <div class="flex items-center gap-3 pt-2">
+                                <input type="checkbox" id="t-published" ${isEdit && tournament.is_published ? 'checked' : ''} class="w-4 h-4 text-brand-600 rounded">
+                                <label for="t-published" class="text-xs font-semibold">Turnier veröffentlichen (für alle sichtbar)</label>
+                            </div>
+                            <button type="submit" class="w-full py-3 bg-brand-600 text-white rounded-xl shadow font-medium text-sm">Speichern</button>                        </form>
                     </div>
                 </main>
             `;
@@ -323,11 +328,15 @@
             return `
                 <header class="bg-white dark:bg-gray-800 border-b px-6 py-4 flex justify-between items-center w-full">
                     <button onclick="goToMain()" class="text-sm font-medium">&larr; Zurück</button>
-                    <span class="font-bold text-sm">Profil</span>
+                    <span class="font-bold text-sm">Profil bearbeiten</span>
                     ${renderThemeToggle()}
                 </header>
                 <main class="w-full max-w-md mx-auto p-6 flex-grow">
                     <div class="bg-white dark:bg-gray-800 rounded-2xl p-8 border shadow-sm space-y-6">
+                        <div>
+                            <label class="block text-xs font-semibold mb-1">Dein Nickname</label>
+                            <input type="text" id="profile-nickname" value="${state.currentUser.nickname || ''}" class="w-full px-4 py-2 border rounded-xl dark:bg-gray-700 text-sm">
+                        </div>
                         <div>
                             <label class="block text-xs font-semibold mb-2">Avatar wählen</label>
                             <div class="grid grid-cols-3 gap-3">
@@ -434,28 +443,35 @@
         }
 
         async function saveProfile() {
+            const newNickname = document.getElementById('profile-nickname').value;
+            const updateData = { nickname: newNickname };
+
             if (state.currentUser.tempAvatarIndex !== undefined) {
                 const idx = state.currentUser.tempAvatarIndex;
-                await supabaseClient.from('profiles').update({ avatar_index: idx }).eq('id', state.currentUser.id);
+                updateData.avatar_index = idx;
                 state.currentUser.selectedAvatarIndex = idx;
                 state.currentUser.avatar = AVATARS[idx];
             }
+
+            await supabaseClient.from('profiles').update(updateData).eq('id', state.currentUser.id);
+            state.currentUser.nickname = newNickname;
             goToMain();
         }
 
         // --- 3.4 Datenbank Operationen ---
-async function handleSaveTournament(e, id) {
+        async function handleSaveTournament(e, id) {
             e.preventDefault();
             const name = document.getElementById('t-name').value;
             const sport_type = document.getElementById('t-sport').value;
             const address = document.getElementById('t-address').value;
             const details = document.getElementById('t-details').value;
+            const is_published = document.getElementById('t-published').checked;
 
             if (id) {
-                await supabaseClient.from('tournaments').update({ name, sport_type, address, details }).eq('id', id);
+                await supabaseClient.from('tournaments').update({ name, sport_type, address, details, is_published }).eq('id', id);
             } else {
                 await supabaseClient.from('tournaments').insert([{ 
-                    name, sport_type, address, details, created_by: state.currentUser.id, admins: [state.currentUser.email] 
+                    name, sport_type, address, details, is_published, created_by: state.currentUser.id, admins: [state.currentUser.email] 
                 }]);
             }
             await loadTournaments();
@@ -489,6 +505,7 @@ async function handleSaveTournament(e, id) {
                 <main class="w-full max-w-4xl mx-auto p-6 flex-grow space-y-8">
                     
                     <!-- VEREINE ABSCHNITT -->
+                   <!-- VEREINE ABSCHNITT -->
                     <section class="space-y-4">
                         <div class="flex justify-between items-center">
                             <h2 class="text-xl font-bold">Deine Vereine</h2>
@@ -499,11 +516,14 @@ async function handleSaveTournament(e, id) {
                             ${myClubs.map(c => `
                                 <div class="bg-white dark:bg-gray-800 p-4 rounded-xl border dark:border-gray-700 flex justify-between items-center">
                                     <div>
-                                        <h3 class="font-bold text-sm">${c.name}</h3>
+                                        <h3 class="font-bold text-sm">${c.name} <span class="text-xs font-normal px-2 py-0.5 rounded ${c.is_published ? 'bg-emerald-100 text-emerald-800' : 'bg-gray-100 text-gray-600'}">${c.is_published ? 'Publiziert' : 'Entwurf'}</span></h3>
                                         <p class="text-xs text-gray-500">📍 ${c.zip_code || ''} ${c.city || ''}</p>
                                         <p class="text-[10px] text-brand-600 mt-1">Manager: ${c.managers.join(', ')}</p>
                                     </div>
-                                    <button onclick="handleAddManagerPrompt('${c.id}')" class="text-xs px-2 py-1 bg-gray-100 dark:bg-gray-700 rounded">+ Manager hinzufügen</button>
+                                    <div class="flex items-center gap-2">
+                                        <button onclick="toggleClubPublish('${c.id}', ${!c.is_published})" class="text-xs px-2.5 py-1.5 bg-gray-100 dark:bg-gray-700 rounded-lg hover:bg-gray-200">${c.is_published ? 'Verstecken' : 'Publizieren'}</button>
+                                        <button onclick="handleAddManagerPrompt('${c.id}')" class="text-xs px-2.5 py-1.5 bg-brand-50 text-brand-600 rounded-lg">+ Manager</button>
+                                    </div>
                                 </div>
                             `).join('')}
                         </div>
@@ -596,6 +616,16 @@ async function handleSaveTournament(e, id) {
             await supabaseClient.from('clubs').update({ managers: updatedManagers }).eq('id', clubId);
             await loadClubsAndTeams();
             render();
+        }
+
+        async function toggleClubPublish(clubId, targetState) {
+            const { error } = await supabaseClient.from('clubs').update({ is_published: targetState }).eq('id', clubId);
+            if (!error) {
+                await loadClubsAndTeams();
+                render();
+            } else {
+                alert("Fehler beim Aktualisieren: " + error.message);
+            }
         }
 
         async function handleAddTeamUserPrompt(teamId, role) {
