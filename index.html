@@ -1,8 +1,8 @@
 <!-- 
     ========================================================================
-    VERSION: 6
+    VERSION: 6.1
     PROJEKT: Turnier & Vereinsmanager (Supabase Cloud Backend)
-    BESCHREIBUNG: Integration von Nicknames, Publish-Switches und Turnierleiter-Rolle
+    BESCHREIBUNG: Nickname-Auflösung, Team-Vereins-Zuordnung & Edit/Delete-Funktionen
     ========================================================================
 -->
 <!DOCTYPE html>
@@ -46,7 +46,7 @@
             <span>•</span>
             <button onclick="openModal('imprint')" class="hover:underline">Impressum</button>
             <span>•</span>
-            <span class="font-semibold text-brand-600 dark:text-brand-400">v6</span>
+            <span class="font-semibold text-brand-600 dark:text-brand-400">v6.1</span>
         </div>
         <p class="mt-1">© 2026 Indiaca Turnier Manager</p>
     </footer>
@@ -78,7 +78,8 @@
             darkMode: localStorage.getItem('vtm_dark') === 'true',
             tournaments: [],
             clubs: [],
-            teams: []
+            teams: [],
+            profiles: []
         };
 
         const AVATARS = [
@@ -123,6 +124,7 @@
             
             if (session) {
                 await loadUserData(session.user);
+                await loadAllProfiles(); 
                 await loadTournaments();
                 await loadClubsAndTeams();
                 state.currentScreen = 'main';
@@ -244,7 +246,6 @@
                         ${renderThemeToggle()}
                         <button onclick="goToClubsAndTeams()" class="px-3 py-2 text-sm bg-brand-50 dark:bg-gray-700 text-brand-600 dark:text-brand-400 font-medium rounded-xl">Vereine & Teams</button>
                         <button onclick="goToProfile()" class="px-3 py-2 text-sm bg-gray-100 dark:bg-gray-700 rounded-xl">Profil</button>
-                        <button onclick="logout()" class="px-3 py-2 text-sm text-red-600">Abmelden</button>
                     </div>
                     <div class="flex items-center gap-3">
                         <div class="w-10 h-10 rounded-full bg-gray-100 dark:bg-gray-700 overflow-hidden border flex items-center justify-center">
@@ -254,6 +255,7 @@
                             <span class="block text-xs text-gray-500 dark:text-gray-400">Angemeldet als</span>
                             <span class="font-semibold text-sm text-gray-800 dark:text-gray-100">${state.currentUser.nickname}</span>
                         </div>
+                        <button onclick="logout()" class="ml-2 px-3 py-1.5 text-xs bg-red-50 hover:bg-red-100 text-red-600 rounded-xl font-medium transition">Abmelden</button>
                     </div>
                 </header>
                 <main class="w-full mx-auto p-6 flex-grow space-y-6">
@@ -483,7 +485,7 @@
 
         function goToClubsAndTeams() { state.currentScreen = 'clubs-teams'; render(); }
 
-        function renderClubsAndTeamsScreen() {
+function renderClubsAndTeamsScreen() {
             const myClubs = state.clubs.filter(c => c.managers && c.managers.includes(state.currentUser.email));
             const myTeams = state.teams.filter(t => (t.coaches && t.coaches.includes(state.currentUser.email)) || (t.members && t.members.includes(state.currentUser.email)));
 
@@ -491,7 +493,14 @@
                 <header class="bg-white dark:bg-gray-800 border-b px-6 py-4 flex justify-between items-center w-full">
                     <button onclick="goToMain()" class="text-sm font-medium">&larr; Zurück zum Hauptmenü</button>
                     <span class="font-bold text-sm">Vereine & Teams</span>
-                    ${renderThemeToggle()}
+                    <div class="flex items-center gap-3">
+                        ${renderThemeToggle()}
+                        <div class="w-8 h-8 rounded-full bg-gray-100 dark:bg-gray-700 overflow-hidden border flex items-center justify-center">
+                            ${state.currentUser.avatar}
+                        </div>
+                        <span class="text-sm font-semibold">${state.currentUser.nickname}</span>
+                        <button onclick="logout()" class="ml-2 px-3 py-1.5 text-xs bg-red-50 hover:bg-red-100 text-red-600 rounded-xl font-medium transition">Abmelden</button>
+                    </div>
                 </header>
                 <main class="w-full max-w-4xl mx-auto p-6 flex-grow space-y-8">
                     
@@ -508,10 +517,12 @@
                                     <div>
                                         <h3 class="font-bold text-sm">${c.name} <span class="text-xs font-normal px-2 py-0.5 rounded ${c.is_published ? 'bg-emerald-100 text-emerald-800' : 'bg-gray-100 text-gray-600'}">${c.is_published ? 'Publiziert' : 'Entwurf'}</span></h3>
                                         <p class="text-xs text-gray-500">📍 ${c.zip_code || ''} ${c.city || ''}</p>
-                                        <p class="text-[10px] text-brand-600 mt-1">Manager: ${c.managers.join(', ')}</p>
+                                        <p class="text-[10px] text-brand-600 mt-1">Manager: ${c.managers.map(m => getNickname(m)).join(', ')}</p>
                                     </div>
                                     <div class="flex items-center gap-2">
                                         <button onclick="toggleClubPublish('${c.id}', ${!c.is_published})" class="text-xs px-2.5 py-1.5 bg-gray-100 dark:bg-gray-700 rounded-lg hover:bg-gray-200">${c.is_published ? 'Verstecken' : 'Publizieren'}</button>
+                                        <button onclick="handleEditClub('${c.id}')" class="text-xs px-2.5 py-1.5 bg-gray-100 dark:bg-gray-700 rounded-lg">Bearbeiten</button>
+                                        <button onclick="handleDeleteClub('${c.id}')" class="text-xs px-2.5 py-1.5 bg-red-50 text-red-600 rounded-lg">Löschen</button>
                                         <button onclick="handleAddManagerPrompt('${c.id}')" class="text-xs px-2.5 py-1.5 bg-brand-50 text-brand-600 rounded-lg">+ Manager</button>
                                     </div>
                                 </div>
@@ -529,20 +540,24 @@
                             ${myTeams.length === 0 ? '<p class="text-xs text-gray-500">Du bist noch keinem Team als Coach oder Mitglied zugeteilt.</p>' : ''}
                             ${myTeams.map(t => {
                                 const isCoach = t.coaches && t.coaches.includes(state.currentUser.email);
+                                const assignedClub = state.clubs.find(c => c.id === t.club_id);
                                 return `
                                     <div class="bg-white dark:bg-gray-800 p-4 rounded-xl border dark:border-gray-700 space-y-2">
                                         <div class="flex justify-between items-center">
                                             <div>
                                                 <h3 class="font-bold text-sm">${t.name} <span class="text-xs font-normal text-gray-500">(${t.description || 'Keine Beschreibung'})</span></h3>
-                                                <p class="text-[10px] text-emerald-600">Coach: ${(t.coaches || []).join(', ')}</p>
-                                                <p class="text-[10px] text-gray-500">Mitglieder: ${(t.members || []).join(', ') || 'Keine'}</p>
+                                                <p class="text-xs text-brand-600 font-medium">Verein: ${assignedClub ? assignedClub.name : 'Kein Verein zugeordnet'}</p>
+                                                <p class="text-[10px] text-emerald-600">Coach: ${(t.coaches || []).map(c => getNickname(c)).join(', ')}</p>
+                                                <p class="text-[10px] text-gray-500">Mitglieder: ${(t.members || []).map(m => getNickname(m)).join(', ') || 'Keine'}</p>
                                             </div>
-                                            ${isCoach ? `
-                                                <div class="flex gap-1">
+                                            <div class="flex items-center gap-1">
+                                                ${isCoach ? `
+                                                    <button onclick="handleEditTeam('${t.id}')" class="text-xs px-2 py-1 bg-gray-100 dark:bg-gray-700 rounded">Bearbeiten</button>
+                                                    <button onclick="handleDeleteTeam('${t.id}')" class="text-xs px-2 py-1 bg-red-50 text-red-600 rounded">Löschen</button>
                                                     <button onclick="handleAddTeamUserPrompt('${t.id}', 'member')" class="text-xs px-2 py-1 bg-gray-100 dark:bg-gray-700 rounded">+ Mitglied</button>
                                                     <button onclick="handleAddTeamUserPrompt('${t.id}', 'coach')" class="text-xs px-2 py-1 bg-gray-100 dark:bg-gray-700 rounded">+ Coach</button>
-                                                </div>
-                                            ` : ''}
+                                                ` : ''}
+                                            </div>
                                         </div>
                                     </div>
                                 `;
@@ -554,7 +569,7 @@
             `;
         }
 
-        async function handleCreateClub() {
+async function handleCreateClub() {
             const name = prompt("Name des Vereins:");
             if (!name) return;
             const zip_code = prompt("Postleitzahl:");
@@ -574,13 +589,59 @@
             }
         }
 
+        async function handleEditClub(clubId) {
+            const club = state.clubs.find(c => c.id === clubId);
+            if (!club) return;
+
+            const name = prompt("Neuer Name des Vereins:", club.name);
+            if (!name) return;
+            const zip_code = prompt("Neue Postleitzahl:", club.zip_code || '');
+            const city = prompt("Neuer Ort:", club.city || '');
+
+            const { error } = await supabaseClient.from('clubs').update({ name, zip_code, city }).eq('id', clubId);
+            if (error) {
+                alert("Fehler beim Aktualisieren: " + error.message);
+            } else {
+                await loadClubsAndTeams();
+                render();
+            }
+        }
+
+        async function handleDeleteClub(clubId) {
+            if (!confirm("Möchtest du diesen Verein wirklich löschen?")) return;
+            const { error } = await supabaseClient.from('clubs').delete().eq('id', clubId);
+            if (error) {
+                alert("Fehler beim Löschen: " + error.message);
+            } else {
+                await loadClubsAndTeams();
+                render();
+            }
+        }
+
         async function handleCreateTeam() {
+            if (state.clubs.length === 0) {
+                alert("Du musst zuerst mindestens einen Verein anlegen, bevor du ein Team erstellen kannst!");
+                return;
+            }
+
             const name = prompt("Name des Teams:");
             if (!name) return;
             const description = prompt("Beschreibung (z.B. Herren Ü50):");
 
+            // Verein auswählen lassen
+            let clubListText = state.clubs.map((c, idx) => `${idx + 1}: ${c.name}`).join('\n');
+            let clubIndexInput = prompt(`Wähle den Verein für dieses Team (Nummer eingeben):\n${clubListText}`);
+            let clubIndex = parseInt(clubIndexInput) - 1;
+
+            if (isNaN(clubIndex) || !state.clubs[clubIndex]) {
+                alert("Ungültige Verein-Auswahl.");
+                return;
+            }
+            const selectedClubId = state.clubs[clubIndex].id;
+
             const { error } = await supabaseClient.from('teams').insert([{
                 name, description,
+                club_id: selectedClubId,
                 created_by: state.currentUser.id,
                 coaches: [state.currentUser.email],
                 members: []
@@ -588,6 +649,43 @@
 
             if (error) {
                 alert("Fehler beim Erstellen: " + error.message);
+            } else {
+                await loadClubsAndTeams();
+                render();
+            }
+        }
+
+        async function handleEditTeam(teamId) {
+            const team = state.teams.find(t => t.id === teamId);
+            if (!team) return;
+
+            const name = prompt("Neuer Name des Teams:", team.name);
+            if (!name) return;
+            const description = prompt("Neue Beschreibung:", team.description || '');
+
+            let clubListText = state.clubs.map((c, idx) => `${idx + 1}: ${c.name}`).join('\n');
+            let clubIndexInput = prompt(`Wähle den Verein für dieses Team (Nummer eingeben):\n${clubListText}`);
+            let clubIndex = parseInt(clubIndexInput) - 1;
+
+            let updateData = { name, description };
+            if (!isNaN(clubIndex) && state.clubs[clubIndex]) {
+                updateData.club_id = state.clubs[clubIndex].id;
+            }
+
+            const { error } = await supabaseClient.from('teams').update(updateData).eq('id', teamId);
+            if (error) {
+                alert("Fehler beim Aktualisieren: " + error.message);
+            } else {
+                await loadClubsAndTeams();
+                render();
+            }
+        }
+
+        async function handleDeleteTeam(teamId) {
+            if (!confirm("Möchtest du dieses Team wirklich löschen?")) return;
+            const { error } = await supabaseClient.from('teams').delete().eq('id', teamId);
+            if (error) {
+                alert("Fehler beim Löschen: " + error.message);
             } else {
                 await loadClubsAndTeams();
                 render();
