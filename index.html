@@ -10,7 +10,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Turnier Manager - v6</title>
+    <title>Turnier Manager - v6.1</title>
     <!-- Tailwind CSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- Supabase JS SDK -->
@@ -148,6 +148,17 @@
                 selectedAvatarIndex: profile.avatar_index || 0,
                 avatar: AVATARS[profile.avatar_index || 0]
             };
+        }
+
+        async function loadAllProfiles() {
+            const { data } = await supabaseClient.from('profiles').select('*');
+            state.profiles = data || [];
+        }
+
+        function getNickname(email) {
+            if (!email) return '';
+            const p = state.profiles.find(item => item.email === email);
+            return p && p.nickname ? p.nickname : email.split('@')[0];
         }
 
         async function loadTournaments() {
@@ -485,7 +496,7 @@
 
         function goToClubsAndTeams() { state.currentScreen = 'clubs-teams'; render(); }
 
-function renderClubsAndTeamsScreen() {
+        function renderClubsAndTeamsScreen() {
             const myClubs = state.clubs.filter(c => c.managers && c.managers.includes(state.currentUser.email));
             const myTeams = state.teams.filter(t => (t.coaches && t.coaches.includes(state.currentUser.email)) || (t.members && t.members.includes(state.currentUser.email)));
 
@@ -569,7 +580,7 @@ function renderClubsAndTeamsScreen() {
             `;
         }
 
-async function handleCreateClub() {
+        async function handleCreateClub() {
             const name = prompt("Name des Vereins:");
             if (!name) return;
             const zip_code = prompt("Postleitzahl:");
