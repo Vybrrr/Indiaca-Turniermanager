@@ -119,21 +119,31 @@
         // =========================================================================
         // PROZESSSCHRITT 2: RENDER ENGINE & COMPONENT TEMPLATES
         // =========================================================================
-        async function initApp() {
+       async function initApp() {
+            try {
             applyTheme();
-            const { data: { session } } = await supabaseClient.auth.getSession();
-            
-            if (session) {
-                await loadUserData(session.user);
-                await loadAllProfiles(); 
-                await loadTournaments();
-                await loadClubsAndTeams();
-                state.currentScreen = 'main';
-            } else {
-                state.currentScreen = 'auth';
-            }
-            render();
+            console.log("Checkpoint 1: Theme angewendet");
+        
+            const { data: { session }, error: sessionError } = await supabaseClient.auth.getSession();
+            if (sessionError) console.error("Session Fehler:", sessionError);
+            console.log("Checkpoint 2: Session geprüft", session);
+
+        if (session) {
+            await loadUserData(session.user);
+            await loadAllProfiles(); 
+            await loadTournaments();
+            await loadClubsAndTeams();
+            state.currentScreen = 'main';
+        } else {
+            state.currentScreen = 'auth';
         }
+        render();
+        console.log("Checkpoint 3: Render erfolgreich");
+    } catch (err) {
+        alert("KRITISCHER FEHLER beim Start: " + err.message);
+        console.error(err);
+    }
+}
 
         async function loadUserData(authUser) {
             let { data: profile } = await supabaseClient.from('profiles').select('*').eq('id', authUser.id).single();
