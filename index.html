@@ -1,8 +1,9 @@
 <!-- 
     ========================================================================
-    VERSION: 6.3
+    VERSION: 6.4
     PROJEKT: Turnier & Vereinsmanager (Supabase Cloud Backend)
-    BESCHREIBUNG: Formular-basierte Editier-Masken & Vereinslogo-Upload
+    BESCHREIBUNG: Vereins-Startansicht mit Sortierung, Turnier-Anmeldeschluss &
+                  Rollenprüfung (ClubManager / TeamCoach), Nickname-Fix & Homepage
     ========================================================================
 -->
 <!DOCTYPE html>
@@ -10,7 +11,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Turnier Manager - v6.3</title>
+    <title>Turnier Manager - v6.4</title>
     <!-- Tailwind CSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- Supabase JS SDK -->
@@ -30,23 +31,19 @@
 </head>
 <body class="bg-gray-50 dark:bg-gray-900 text-gray-800 dark:text-gray-100 font-sans min-h-screen flex flex-col justify-between transition-colors duration-200">
 
-    <!-- ==========================================
-         APP CONTAINER & ROUTING (Single Page Render)
-         ========================================== -->
-    <div id="app" class="flex-grow flex flex-col items-center justify-center p-4">
-        <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-brand-600"></div>
+    <!-- =====================================================================
+         PROZESSSCHRITT 0: APP CONTAINER & GLOBALES FOOTER-LAYOUT
+         ===================================================================== -->
+    <div id="app" class="flex-grow flex flex-col justify-between w-full max-w-5xl mx-auto p-4">
+        <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-brand-600 m-auto"></div>
     </div>
 
-    <!-- ==========================================
-         GLOBAL FOOTER (Mit Version & Impressum)
-         ========================================== -->
     <footer class="bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 py-4 text-center text-xs text-gray-500 dark:text-gray-400 transition-colors duration-200 w-full">
-        <div class="space-x-4">
+        <div class="space-x-3">
             <button onclick="openModal('privacy')" class="hover:underline">Privacy Policy</button>
             <span>•</span>
             <button onclick="openModal('imprint')" class="hover:underline">Impressum</button>
-            <span>•</span>
-            <span class="font-semibold text-brand-600 dark:text-brand-400">v6.3</span>
+            <span class="text-[11px] font-semibold text-brand-600 dark:text-brand-400">v6.4</span>
         </div>
         <p class="mt-1">© 2026 Indiaca Turnier Manager</p>
     </footer>
@@ -59,25 +56,24 @@
         </div>
     </div>
 
-    <!-- ==========================================
-         JAVASCRIPT LOGIK & SUPABASE INTEGRATION
-         ========================================== -->
     <script>
-        // =========================================================================
-        // PROZESSSCHRITT 1: CONFIGURATION & INITIAL STATE
-        // =========================================================================
+        // =====================================================================
+        // PROZESSSCHRITT 1: KONFIGURATION, INITIAL STATE & THEME-STEUERUNG
+        // =====================================================================
         const SUPABASE_URL = 'https://tmwbxykmzmhoszmvxpxe.supabase.co';
         const SUPABASE_ANON_KEY = 'sb_publishable_LEgAIw7A8z6Ad773wrfetw_b2Z0NruV';
 
         const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
         let state = {
-            currentScreen: 'loading', // 'auth', 'main', 'create-tournament', 'detail-tournament', 'profile', 'clubs-teams', 'edit-club', 'edit-team'
-            clubsTab: 'mine', 
-            currentUser: null, 
-            activeTournamentId: null, 
-            activeClubId: null, // Zum Bearbeiten eines spezifischen Vereins
-            activeTeamId: null, // Zum Bearbeiten eines spezifischen Teams
+            currentScreen: 'loading', // 'auth', 'main', 'tournaments', 'create-tournament', 'detail-tournament', 'profile', 'clubs-teams', 'edit-club', 'edit-team'
+            clubsTab: 'mine',
+            clubSortBy: 'name', // 'name' | 'city' | 'zip'
+            clubSortDir: 'asc', // 'asc' | 'desc'
+            currentUser: null,
+            activeTournamentId: null,
+            activeClubId: null,
+            activeTeamId: null,
             darkMode: localStorage.getItem('vtm_dark') === 'true',
             tournaments: [],
             clubs: [],
@@ -97,7 +93,6 @@
             '<svg class="w-full h-full text-orange-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/></svg>'
         ];
 
-        // --- Theme handling ---
         function applyTheme() {
             if (state.darkMode) document.documentElement.classList.add('dark');
             else document.documentElement.classList.remove('dark');
@@ -118,16 +113,16 @@
             `;
         }
 
-        // =========================================================================
-        // PROZESSSCHRITT 2: RENDER ENGINE & INITIALISIERUNG
-        // =========================================================================
+        // =====================================================================
+        // PROZESSSCHRITT 2: DATENLADEN, ROLLENPRÜFUNG & SORTIER-HILFSFUNKTIONEN
+        // =====================================================================
         async function initApp() {
             applyTheme();
             const { data: { session } } = await supabaseClient.auth.getSession();
-            
+
             if (session) {
                 await loadUserData(session.user);
-                await loadAllProfiles(); 
+                await loadAllProfiles();
                 await loadTournaments();
                 await loadClubsAndTeams();
                 state.currentScreen = 'main';
@@ -176,16 +171,67 @@
             state.teams = teamsData || [];
         }
 
+        // Prüft, ob der aktuelle Nutzer ClubManager oder TeamCoach ist
+        function canCreateTournament() {
+            if (!state.currentUser) return false;
+            const email = state.currentUser.email;
+            const isClubManager = state.clubs.some(c => Array.isArray(c.managers) && c.managers.includes(email));
+            const isTeamCoach = state.teams.some(t => Array.isArray(t.coaches) && t.coaches.includes(email));
+            return isClubManager || isTeamCoach;
+        }
+
+        // Prüft, ob der Nutzer einem Verein als Mitglied oder Manager angehört
+        function isUserClubMemberOrManager(club) {
+            if (!state.currentUser || !club) return false;
+            const email = state.currentUser.email;
+            return (Array.isArray(club.members) && club.members.includes(email)) ||
+                   (Array.isArray(club.managers) && club.managers.includes(email));
+        }
+
+        // Sortiert Vereine nach Name, Stadt oder PLZ
+        function getSortedClubs(clubList) {
+            const factor = state.clubSortDir === 'asc' ? 1 : -1;
+            return [...clubList].sort((a, b) => {
+                if (state.clubSortBy === 'zip') {
+                    const zipA = parseInt((a.zip_code || '').replace(/\D/g, ''), 10);
+                    const zipB = parseInt((b.zip_code || '').replace(/\D/g, ''), 10);
+                    if (!isNaN(zipA) && !isNaN(zipB) && zipA !== zipB) {
+                        return (zipA - zipB) * factor;
+                    }
+                    return String(a.zip_code || '').localeCompare(String(b.zip_code || ''), 'de', { numeric: true }) * factor;
+                }
+                if (state.clubSortBy === 'city') {
+                    return String(a.city || '').localeCompare(String(b.city || ''), 'de', { sensitivity: 'base' }) * factor;
+                }
+                return String(a.name || '').localeCompare(String(b.name || ''), 'de', { sensitivity: 'base' }) * factor;
+            });
+        }
+
+        function setClubSort(sortBy) {
+            if (state.clubSortBy === sortBy) {
+                state.clubSortDir = state.clubSortDir === 'asc' ? 'desc' : 'asc';
+            } else {
+                state.clubSortBy = sortBy;
+                state.clubSortDir = 'asc';
+            }
+            render();
+        }
+
+        // =====================================================================
+        // PROZESSSCHRITT 3: RENDER-ENGINE & HEADER-KOMPONENTE
+        // =====================================================================
         function render() {
             const app = document.getElementById('app');
-            app.className = "flex-grow flex flex-col justify-between w-full max-w-5xl";
-            
-            switch(state.currentScreen) {
+
+            switch (state.currentScreen) {
                 case 'auth':
                     app.innerHTML = renderAuthScreen();
                     break;
                 case 'main':
                     app.innerHTML = renderMainScreen();
+                    break;
+                case 'tournaments':
+                    app.innerHTML = renderTournamentsScreen();
                     break;
                 case 'create-tournament':
                     app.innerHTML = renderTournamentForm(null);
@@ -209,10 +255,191 @@
             }
         }
 
-        // =========================================================================
-        // PROZESSSCHRITT 3: SCREENS & FORMULARE
-        // =========================================================================
-        
+        function renderAppHeader(titleText, showBackToMain = false) {
+            const allowTournamentCreate = canCreateTournament();
+            return `
+                <header class="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 px-6 py-4 flex flex-wrap justify-between items-center gap-3 shadow-sm w-full rounded-2xl">
+                    <div class="flex flex-wrap items-center gap-2">
+                        ${showBackToMain ? `<button onclick="goToMain()" class="px-3 py-2 text-xs font-medium bg-gray-100 dark:bg-gray-700 rounded-xl hover:bg-gray-200">&larr; Vereine-Start</button>` : ''}
+                        <span class="font-bold text-sm px-2">${titleText}</span>
+                        ${renderThemeToggle()}
+                        <button onclick="goToClubsAndTeams()" class="px-3 py-2 text-xs bg-brand-50 dark:bg-gray-700 text-brand-600 dark:text-brand-400 font-medium rounded-xl">Vereine & Teams verwalten</button>
+                        <button onclick="goToTournaments()" class="px-3 py-2 text-xs bg-gray-100 dark:bg-gray-700 rounded-xl font-medium">Turniere</button>
+                        <button onclick="goToProfile()" class="px-3 py-2 text-xs bg-gray-100 dark:bg-gray-700 rounded-xl font-medium">Profil</button>
+                        ${allowTournamentCreate ? `<button onclick="goToCreateTournament()" class="px-3 py-2 text-xs bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-medium shadow">+ Turnier</button>` : ''}
+                    </div>
+                    <div class="flex items-center gap-3">
+                        <div class="w-9 h-9 rounded-full bg-gray-100 dark:bg-gray-700 overflow-hidden border flex items-center justify-center">
+                            ${state.currentUser.avatar}
+                        </div>
+                        <div>
+                            <span class="block text-[10px] text-gray-500 dark:text-gray-400">Angemeldet als</span>
+                            <span class="font-semibold text-xs text-gray-800 dark:text-gray-100">${state.currentUser.nickname}</span>
+                        </div>
+                        <button onclick="logout()" class="ml-1 px-3 py-1.5 text-xs bg-red-50 hover:bg-red-100 text-red-600 rounded-xl font-medium transition">Abmelden</button>
+                    </div>
+                </header>
+            `;
+        }
+
+        // =====================================================================
+        // PROZESSSCHRITT 4: HAUPTSEITE (VEREINE-HUB MIT EIGENEN & PUBLIZIERTEN VEREINEN)
+        // =====================================================================
+        function renderClubCard(c, isOwnSection = false) {
+            const isMember = c.members && c.members.includes(state.currentUser.email);
+            const isManager = c.managers && c.managers.includes(state.currentUser.email);
+            const isPending = c.pending_members && c.pending_members.includes(state.currentUser.email);
+            const clubTeams = state.teams.filter(t => t.club_id === c.id);
+            const showTeams = isMember || isManager;
+
+            return `
+                <div class="bg-white dark:bg-gray-800 p-5 rounded-2xl border ${isOwnSection ? 'border-brand-300 dark:border-brand-700' : 'border-gray-200 dark:border-gray-700'} shadow-sm space-y-4">
+                    <div class="flex flex-wrap justify-between items-start gap-4">
+                        <div class="flex items-start gap-4">
+                            ${c.logo_url
+                                ? `<img src="${c.logo_url}" alt="Logo ${c.name}" class="w-14 h-14 object-cover rounded-xl border shrink-0">`
+                                : `<div class="w-14 h-14 rounded-xl bg-gray-100 dark:bg-gray-700 flex items-center justify-center text-xs font-bold text-gray-400 shrink-0">LOGO</div>`
+                            }
+                            <div class="space-y-1">
+                                <div class="flex items-center gap-2 flex-wrap">
+                                    <h3 class="font-bold text-base">${c.name}</h3>
+                                    ${isManager ? `<span class="text-[11px] bg-brand-100 text-brand-800 px-2 py-0.5 rounded-full font-medium">Manager</span>` : ''}
+                                    ${!isManager && isMember ? `<span class="text-[11px] bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full font-medium">ClubMember</span>` : ''}
+                                </div>
+                                <p class="text-xs text-gray-500">📍 ${c.zip_code || '-'} ${c.city || ''}</p>
+                                ${c.website_url ? `<p class="text-xs"><a href="${c.website_url}" target="_blank" rel="noopener noreferrer" class="text-brand-600 hover:underline">🌐 Vereins-Homepage</a></p>` : ''}
+                                <p class="text-[11px] text-gray-500">Manager: ${(c.managers || []).map(m => getNickname(m)).join(', ') || '-'}</p>
+                            </div>
+                        </div>
+                        <div>
+                            ${(isManager || isMember) ? `
+                                <span class="text-xs bg-emerald-100 text-emerald-800 px-3 py-1 rounded-full font-medium">Mitglied</span>
+                            ` : isPending ? `
+                                <span class="text-xs bg-amber-100 text-amber-800 px-3 py-1 rounded-full font-medium">Anfrage ausstehend</span>
+                            ` : `
+                                <button onclick="requestClubJoin('${c.id}')" class="text-xs px-3 py-1.5 bg-brand-600 hover:bg-brand-700 text-white rounded-xl shadow font-medium transition">Beitritt anfragen</button>
+                            `}
+                        </div>
+                    </div>
+
+                    ${showTeams ? `
+                        <div class="border-t border-gray-100 dark:border-gray-700 pt-3 space-y-2">
+                            <h4 class="text-xs font-bold text-gray-500 uppercase tracking-wide">Teams im Verein (${clubTeams.length})</h4>
+                            ${clubTeams.length === 0 ? `<p class="text-xs text-gray-400 italic">Noch keine Teams in diesem Verein angelegt.</p>` : `
+                                <div class="grid gap-2">
+                                    ${clubTeams.map(t => {
+                                        const isTeamMember = t.members && t.members.includes(state.currentUser.email);
+                                        const isTeamCoach = t.coaches && t.coaches.includes(state.currentUser.email);
+                                        const isTeamPending = t.pending_members && t.pending_members.includes(state.currentUser.email);
+                                        return `
+                                            <div class="flex justify-between items-center bg-gray-50 dark:bg-gray-700/50 p-3 rounded-xl">
+                                                <div>
+                                                    <span class="font-semibold text-sm">${t.name}</span>
+                                                    <span class="text-xs text-gray-500 block">${t.description || 'Keine Beschreibung'}</span>
+                                                    <span class="text-[10px] text-emerald-600">Coach: ${(t.coaches || []).map(co => getNickname(co)).join(', ')}</span>
+                                                </div>
+                                                <div>
+                                                    ${(isTeamCoach || isTeamMember) ? `
+                                                        <span class="text-xs bg-emerald-100 text-emerald-800 px-2.5 py-1 rounded-lg font-medium">Dabei</span>
+                                                    ` : isTeamPending ? `
+                                                        <span class="text-xs bg-amber-100 text-amber-800 px-2.5 py-1 rounded-lg font-medium">Anfrage läuft</span>
+                                                    ` : `
+                                                        <button onclick="requestTeamJoin('${t.id}')" class="text-xs bg-brand-600 hover:bg-brand-700 text-white px-3 py-1.5 rounded-lg shadow font-medium">Team-Beitritt anfragen</button>
+                                                    `}
+                                                </div>
+                                            </div>
+                                        `;
+                                    }).join('')}
+                                </div>
+                            `}
+                        </div>
+                    ` : ''}
+                </div>
+            `;
+        }
+
+        function renderSortControls() {
+            const arrow = (field) => state.clubSortBy === field ? (state.clubSortDir === 'asc' ? '↑' : '↓') : '↕';
+            return `
+                <div class="flex flex-wrap items-center gap-2 text-xs">
+                    <span class="text-gray-500 font-medium">Sortieren:</span>
+                    <button onclick="setClubSort('name')" class="px-3 py-1.5 rounded-xl border ${state.clubSortBy === 'name' ? 'bg-brand-600 text-white border-brand-600' : 'bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700'} font-medium transition">
+                        Name ${arrow('name')}
+                    </button>
+                    <button onclick="setClubSort('city')" class="px-3 py-1.5 rounded-xl border ${state.clubSortBy === 'city' ? 'bg-brand-600 text-white border-brand-600' : 'bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700'} font-medium transition">
+                        Stadt ${arrow('city')}
+                    </button>
+                    <button onclick="setClubSort('zip')" class="px-3 py-1.5 rounded-xl border ${state.clubSortBy === 'zip' ? 'bg-brand-600 text-white border-brand-600' : 'bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700'} font-medium transition">
+                        PLZ ${arrow('zip')}
+                    </button>
+                </div>
+            `;
+        }
+
+        function renderMainScreen() {
+            const publishedClubs = state.clubs.filter(c => c.is_published === true);
+            const ownClubs = getSortedClubs(state.clubs.filter(c => isUserClubMemberOrManager(c)));
+            const otherPublishedClubs = getSortedClubs(
+                publishedClubs.filter(c => !isUserClubMemberOrManager(c))
+            );
+            const allPublishedSorted = getSortedClubs(publishedClubs);
+
+            return `
+                <div class="space-y-6 w-full">
+                    ${renderAppHeader('Vereine entdecken', false)}
+
+                    <main class="w-full space-y-8">
+                        ${ownClubs.length > 0 ? `
+                            <!-- EIGENE VEREINE (WENN MINDESTENS EIN VEREIN ZUGEORDNET IST) -->
+                            <section class="space-y-4">
+                                <div class="flex justify-between items-center">
+                                    <h2 class="text-xl font-bold">Deine Vereine</h2>
+                                    <span class="text-xs text-gray-500">${ownClubs.length} Verein(e)</span>
+                                </div>
+                                <div class="grid gap-4">
+                                    ${ownClubs.map(c => renderClubCard(c, true)).join('')}
+                                </div>
+                            </section>
+
+                            <!-- WEITERE PUBLIZIERTE VEREINE MIT SORTIERUNG -->
+                            <section class="space-y-4">
+                                <div class="flex flex-wrap justify-between items-center gap-3">
+                                    <h2 class="text-xl font-bold">Weitere veröffentlichte Vereine</h2>
+                                    ${renderSortControls()}
+                                </div>
+                                <div class="grid gap-4">
+                                    ${otherPublishedClubs.length === 0
+                                        ? `<p class="text-xs text-gray-500">Keine weiteren veröffentlichten Vereine vorhanden.</p>`
+                                        : otherPublishedClubs.map(c => renderClubCard(c, false)).join('')
+                                    }
+                                </div>
+                            </section>
+                        ` : `
+                            <!-- DEFAULT FÜR NEUE NUTZER: ALLE VERÖFFENTLICHTEN VEREINE MIT SORTIERUNG -->
+                            <section class="space-y-4">
+                                <div class="bg-brand-50 dark:bg-brand-900/20 border border-brand-200 dark:border-brand-800 rounded-2xl p-4 text-xs text-brand-900 dark:text-brand-200">
+                                    Willkommen! Hier findest du alle veröffentlichten Vereine. Stelle eine Beitrittsanfrage bei einem Verein, um dessen Teams zu sehen und Team-Mitgliedschaften anzufragen.
+                                </div>
+                                <div class="flex flex-wrap justify-between items-center gap-3">
+                                    <h2 class="text-xl font-bold">Veröffentlichte Vereine</h2>
+                                    ${renderSortControls()}
+                                </div>
+                                <div class="grid gap-4">
+                                    ${allPublishedSorted.length === 0
+                                        ? `<p class="text-xs text-gray-500">Derzeit sind keine veröffentlichten Vereine vorhanden.</p>`
+                                        : allPublishedSorted.map(c => renderClubCard(c, false)).join('')
+                                    }
+                                </div>
+                            </section>
+                        `}
+                    </main>
+                </div>
+            `;
+        }
+
+        // =====================================================================
+        // PROZESSSCHRITT 5: TURNIERE, PROFIL, VEREINS- & TEAM-FORMULARE
+        // =====================================================================
         function renderAuthScreen() {
             return `
                 <div class="flex justify-end p-4 w-full">${renderThemeToggle()}</div>
@@ -220,14 +447,14 @@
                     <div class="max-w-md w-full bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-8 space-y-6">
                         <div class="text-center space-y-2">
                             <h1 class="text-2xl font-bold text-gray-900 dark:text-white">Indiaca Turnier Manager</h1>
-                            <p class="text-sm text-gray-600 dark:text-gray-300">Echte Cloud-Synchronisation für Turniere und Vereine.</p>
+                            <p class="text-sm text-gray-600 dark:text-gray-300">Vereine entdecken, Teams organisieren & Turniere planen.</p>
                         </div>
-                        
+
                         <div class="space-y-3 pt-2">
                             <label class="block text-xs font-semibold text-gray-600 dark:text-gray-400">Mit E-Mail anmelden oder registrieren</label>
                             <input type="email" id="emailInput" placeholder="E-Mail-Adresse" class="w-full px-4 py-2 border rounded-xl dark:bg-gray-700 dark:border-gray-600 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500" />
                             <input type="password" id="passwordInput" placeholder="Passwort" class="w-full px-4 py-2 border rounded-xl dark:bg-gray-700 dark:border-gray-600 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500" />
-                            
+
                             <div class="flex gap-2 pt-1">
                                 <button onclick="handleLoginClick()" class="flex-1 bg-brand-600 hover:bg-brand-700 text-white py-2 rounded-xl text-sm font-medium transition shadow-sm">Einloggen</button>
                                 <button onclick="handleRegisterClick()" class="flex-1 bg-gray-600 hover:bg-gray-700 text-white py-2 rounded-xl text-sm font-medium transition shadow-sm">Registrieren</button>
@@ -242,378 +469,238 @@
 
                         <div>
                             <button onclick="loginWithGoogle()" class="w-full flex items-center justify-center gap-3 py-3 px-4 border border-gray-300 dark:border-gray-600 rounded-xl shadow-sm text-sm font-medium text-gray-700 dark:text-gray-200 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 transition">
-                                <svg class="w-5 h-5" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/></svg>
                                 Mit Google ID anmelden
                             </button>
                         </div>
                     </div>
                 </div>
-                <div></div>
             `;
         }
 
-        function renderMainScreen() {
-            const userTournaments = state.tournaments.filter(t => 
-                (t.admins && t.admins.includes(state.currentUser.email)) || 
-                (t.guests && t.guests.includes(state.currentUser.email)) ||
+        function renderTournamentsScreen() {
+            const allowCreate = canCreateTournament();
+            const visibleTournaments = state.tournaments.filter(t =>
+                t.is_published ||
+                (t.admins && t.admins.includes(state.currentUser.email)) ||
                 t.created_by === state.currentUser.id
             );
 
             return `
-                <header class="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 px-6 py-4 flex justify-between items-center shadow-sm w-full">
-                    <div class="flex items-center gap-3">
-                        ${renderThemeToggle()}
-                        <button onclick="goToClubsAndTeams()" class="px-3 py-2 text-sm bg-brand-50 dark:bg-gray-700 text-brand-600 dark:text-brand-400 font-medium rounded-xl">Vereine & Teams</button>
-                        <button onclick="goToProfile()" class="px-3 py-2 text-sm bg-gray-100 dark:bg-gray-700 rounded-xl">Profil</button>
-                    </div>
-                    <div class="flex items-center gap-3">
-                        <div class="w-10 h-10 rounded-full bg-gray-100 dark:bg-gray-700 overflow-hidden border flex items-center justify-center">
-                            ${state.currentUser.avatar}
+                <div class="space-y-6 w-full">
+                    ${renderAppHeader('Turniere', true)}
+                    <main class="w-full space-y-6">
+                        <div class="flex justify-between items-center">
+                            <h2 class="text-xl font-bold">Turnierübersicht</h2>
+                            ${allowCreate
+                                ? `<button onclick="goToCreateTournament()" class="px-4 py-2 bg-brand-600 text-white font-medium rounded-xl shadow text-sm">+ Turnier erstellen</button>`
+                                : `<span class="text-xs text-gray-500 bg-gray-100 dark:bg-gray-800 px-3 py-1.5 rounded-xl">Nur für ClubManager oder TeamCoach freigeschaltet</span>`
+                            }
                         </div>
-                        <div>
-                            <span class="block text-xs text-gray-500 dark:text-gray-400">Angemeldet als</span>
-                            <span class="font-semibold text-sm text-gray-800 dark:text-gray-100">${state.currentUser.nickname}</span>
+                        <div class="grid gap-4">
+                            ${visibleTournaments.length === 0 ? `<p class="text-xs text-gray-500">Noch keine Turniere vorhanden.</p>` : ''}
+                            ${visibleTournaments.map(t => {
+                                const isAdmin = (t.admins && t.admins.includes(state.currentUser.email)) || t.created_by === state.currentUser.id;
+                                return `
+                                    <div onclick="${isAdmin ? `openTournament('${t.id}')` : ''}" class="bg-white dark:bg-gray-800 p-5 rounded-2xl border border-gray-200 dark:border-gray-700 shadow-sm ${isAdmin ? 'cursor-pointer hover:border-brand-400' : ''} flex justify-between items-center">
+                                        <div class="space-y-1">
+                                            <h3 class="font-bold text-lg">${t.name} <span class="text-xs font-normal px-2 py-0.5 rounded ${t.is_published ? 'bg-emerald-100 text-emerald-800' : 'bg-gray-100 text-gray-600'}">${t.is_published ? 'Publiziert' : 'Entwurf'}</span></h3>
+                                            <p class="text-xs text-gray-500">Sportart: ${t.sport_type || 'Indiaca'} | 📍 ${t.address || 'Keine Adresse'}</p>
+                                            <p class="text-xs text-amber-600 font-medium">Anmeldeschluss: ${t.registration_deadline ? new Date(t.registration_deadline).toLocaleDateString('de-DE') : 'Kein Datum hinterlegt'}</p>
+                                        </div>
+                                        ${isAdmin ? `<span>&rarr;</span>` : ''}
+                                    </div>
+                                `;
+                            }).join('')}
                         </div>
-                        <button onclick="logout()" class="ml-2 px-3 py-1.5 text-xs bg-red-50 hover:bg-red-100 text-red-600 rounded-xl font-medium transition">Abmelden</button>
-                    </div>
-                </header>
-                <main class="w-full mx-auto p-6 flex-grow space-y-6">
-                    <div class="flex justify-between items-center">
-                        <h2 class="text-xl font-bold">Deine Turniere</h2>
-                        <button onclick="goToCreateTournament()" class="px-4 py-2 bg-brand-600 text-white font-medium rounded-xl shadow text-sm">+ Turnier erstellen</button>
-                    </div>
-                    <div class="grid gap-4">
-                        ${userTournaments.map(t => `
-                            <div onclick="openTournament('${t.id}')" class="bg-white dark:bg-gray-800 p-5 rounded-2xl border border-gray-200 dark:border-gray-700 shadow-sm cursor-pointer flex justify-between items-center">
-                                <div>
-                                    <h3 class="font-bold text-lg">${t.name} <span class="text-xs font-normal px-2 py-0.5 rounded ${t.is_published ? 'bg-emerald-100 text-emerald-800' : 'bg-gray-100 text-gray-600'}">${t.is_published ? 'Publiziert' : 'Entwurf'}</span></h3>
-                                    <p class="text-xs text-gray-500">Sportart: ${t.sport_type || 'Indiaca'} | 📍 ${t.address || 'Keine Adresse'}</p>
-                                </div>
-                                <span>&rarr;</span>
-                            </div>
-                        `).join('')}
-                    </div>
-                </main>
-            `;
-        }
-
-        // NEU: Maske zum Erstellen / Bearbeiten eines Vereins (inkl. Logo-Upload)
-        function renderClubFormScreen() {
-            const isEdit = state.activeClubId !== null;
-            const club = isEdit ? state.clubs.find(c => c.id === state.activeClubId) : { name: '', zip_code: '', city: '', logo_url: '' };
-
-            return `
-                <header class="bg-white dark:bg-gray-800 border-b px-6 py-4 flex justify-between items-center w-full">
-                    <button onclick="goToClubsAndTeams()" class="text-sm font-medium">&larr; Zurück</button>
-                    <span class="font-bold text-sm">${isEdit ? 'Verein bearbeiten' : 'Neuen Verein anlegen'}</span>
-                    ${renderThemeToggle()}
-                </header>
-                <main class="w-full max-w-xl mx-auto p-6 flex-grow">
-                    <div class="bg-white dark:bg-gray-800 rounded-2xl p-8 border shadow-sm">
-                        <form onsubmit="saveClubForm(event)" class="space-y-4">
-                            <div>
-                                <label class="block text-xs font-semibold mb-1">Name des Vereins</label>
-                                <input type="text" id="club-name" required value="${club.name || ''}" class="w-full px-4 py-2 border rounded-xl dark:bg-gray-700 text-sm">
-                            </div>
-                            <div class="grid grid-cols-2 gap-4">
-                                <div>
-                                    <label class="block text-xs font-semibold mb-1">Postleitzahl</label>
-                                    <input type="text" id="club-zip" value="${club.zip_code || ''}" class="w-full px-4 py-2 border rounded-xl dark:bg-gray-700 text-sm">
-                                </div>
-                                <div>
-                                    <label class="block text-xs font-semibold mb-1">Ort</label>
-                                    <input type="text" id="club-city" value="${club.city || ''}" class="w-full px-4 py-2 border rounded-xl dark:bg-gray-700 text-sm">
-                                </div>
-                            </div>
-                            <div>
-                                <label class="block text-xs font-semibold mb-1">Vereinslogo (Bilddatei hochladen oder URL eingeben)</label>
-                                <div class="flex gap-2 items-center">
-                                    <input type="file" id="club-logo-file" accept="image/*" class="w-full text-xs text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-brand-50 file:text-brand-700 hover:file:bg-brand-100">
-                                </div>
-                                <input type="text5" id="club-logo-url" placeholder="Oder Bild-URL direkt eingeben" value="${club.logo_url || ''}" class="w-full mt-2 px-4 py-2 border rounded-xl dark:bg-gray-700 text-xs">
-                            </div>
-                            <button type="submit" class="w-full py-3 bg-brand-600 text-white rounded-xl shadow font-medium text-sm">Verein speichern</button>
-                        </form>
-                    </div>
-                </main>
-            `;
-        }
-
-        // NEU: Maske zum Erstellen / Bearbeiten eines Teams
-        function renderTeamFormScreen() {
-            const isEdit = state.activeTeamId !== null;
-            const team = isEdit ? state.teams.find(t => t.id === state.activeTeamId) : { name: '', description: '', club_id: '' };
-
-            return `
-                <header class="bg-white dark:bg-gray-800 border-b px-6 py-4 flex justify-between items-center w-full">
-                    <button onclick="goToClubsAndTeams()" class="text-sm font-medium">&larr; Zurück</button>
-                    <span class="font-bold text-sm">${isEdit ? 'Team bearbeiten' : 'Neues Team anlegen'}</span>
-                    ${renderThemeToggle()}
-                </header>
-                <main class="w-full max-w-xl mx-auto p-6 flex-grow">
-                    <div class="bg-white dark:bg-gray-800 rounded-2xl p-8 border shadow-sm">
-                        <form onsubmit="saveTeamForm(event)" class="space-y-4">
-                            <div>
-                                <label class="block text-xs font-semibold mb-1">Name des Teams</label>
-                                <input type="text" id="team-name" required value="${team.name || ''}" class="w-full px-4 py-2 border rounded-xl dark:bg-gray-700 text-sm">
-                            </div>
-                            <div>
-                                <label class="block text-xs font-semibold mb-1">Beschreibung (z.B. Herren Ü50)</label>
-                                <input type="text" id="team-desc" value="${team.description || ''}" class="w-full px-4 py-2 border rounded-xl dark:bg-gray-700 text-sm">
-                            </div>
-                            <div>
-                                <label class="block text-xs font-semibold mb-1">Zugeordneter Verein</label>
-                                <select id="team-club-id" required class="w-full px-4 py-2 border rounded-xl dark:bg-gray-700 text-sm">
-                                    <option value="">Bitte Verein wählen...</option>
-                                    ${state.clubs.map(c => `
-                                        <option value="${c.id}" ${team.club_id === c.id ? 'selected' : ''}>${c.name}</option>
-                                    `).join('')}
-                                </select>
-                            </div>
-                            <button type="submit" class="w-full py-3 bg-brand-600 text-white rounded-xl shadow font-medium text-sm">Team speichern</button>
-                        </form>
-                    </div>
-                </main>
+                    </main>
+                </div>
             `;
         }
 
         function renderTournamentForm(tournament = null) {
+            if (!canCreateTournament()) {
+                return `
+                    <div class="space-y-6 w-full">
+                        ${renderAppHeader('Zugriff eingeschränkt', true)}
+                        <div class="bg-white dark:bg-gray-800 rounded-2xl p-8 border text-center space-y-3">
+                            <p class="font-bold text-sm text-red-600">Keine Berechtigung zum Anlegen oder Bearbeiten von Turnieren</p>
+                            <p class="text-xs text-gray-500">Turniere können nur von Nutzern mit der Rolle ClubManager oder TeamCoach erstellt werden.</p>
+                        </div>
+                    </div>
+                `;
+            }
+
             const isEdit = tournament !== null;
             const currentSport = isEdit ? (tournament.sport_type || 'Indiaca') : 'Indiaca';
-            
+            const deadlineVal = isEdit && tournament.registration_deadline ? tournament.registration_deadline.slice(0, 10) : '';
+
             return `
-                <header class="bg-white dark:bg-gray-800 border-b px-6 py-4 flex justify-between items-center w-full">
-                    <button onclick="goToMain()" class="text-sm font-medium">&larr; Zurück</button>
-                    <span class="font-bold text-sm">${isEdit ? 'Turnier bearbeiten' : 'Neues Turnier'}</span>
-                    ${renderThemeToggle()}
-                </header>
-                <main class="w-full max-w-2xl mx-auto p-6 flex-grow">
-                    <div class="bg-white dark:bg-gray-800 rounded-2xl p-8 border shadow-sm">
-                        <form onsubmit="handleSaveTournament(event, '${isEdit ? tournament.id : ''}')" class="space-y-4">
-                            <div>
-                                <label class="block text-xs font-semibold mb-1">Name des Turniers</label>
-                                <input type="text" id="t-name" required value="${isEdit ? tournament.name : ''}" class="w-full px-4 py-2 border rounded-xl dark:bg-gray-700 text-sm">
-                            </div>
-                            <div>
-                                <label class="block text-xs font-semibold mb-1">Sportart</label>
-                                <select id="t-sport" class="w-full px-4 py-2 border rounded-xl dark:bg-gray-700 text-sm">
-                                    <option value="Indiaca" ${currentSport === 'Indiaca' ? 'selected' : ''}>Indiaca</option>
-                                    <option value="Volleyball" ${currentSport === 'Volleyball' ? 'selected' : ''}>Volleyball</option>
-                                    <option value="Beachvolleyball" ${currentSport === 'Beachvolleyball' ? 'selected' : ''}>Beachvolleyball</option>
-                                    <option value="Sonstige" ${currentSport === 'Sonstige' ? 'selected' : ''}>Sonstige</option>
-                                </select>
-                            </div>
-                            <div>
-                                <label class="block text-xs font-semibold mb-1">Adresse / Halle</label>
-                                <input type="text" id="t-address" value="${isEdit ? (tournament.address || '') : ''}" class="w-full px-4 py-2 border rounded-xl dark:bg-gray-700 text-sm">
-                            </div>
-                            <div>
-                                <label class="block text-xs font-semibold mb-1">Details / Beschreibung</label>
-                                <textarea id="t-details" rows="3" class="w-full px-4 py-2 border rounded-xl dark:bg-gray-700 text-sm">${isEdit ? (tournament.details || '') : ''}</textarea>
-                            </div>
-                            <div class="flex items-center gap-3 pt-2">
-                                <input type="checkbox" id="t-published" ${isEdit && tournament.is_published ? 'checked' : ''} class="w-4 h-4 text-brand-600 rounded">
-                                <label for="t-published" class="text-xs font-semibold">Turnier veröffentlichen (für alle sichtbar)</label>
-                            </div>
-                            <button type="submit" class="w-full py-3 bg-brand-600 text-white rounded-xl shadow font-medium text-sm">Speichern</button>
-                        </form>
-                    </div>
-                </main>
+                <div class="space-y-6 w-full">
+                    ${renderAppHeader(isEdit ? 'Turnier bearbeiten' : 'Neues Turnier', true)}
+                    <main class="w-full max-w-2xl mx-auto">
+                        <div class="bg-white dark:bg-gray-800 rounded-2xl p-8 border shadow-sm">
+                            <form onsubmit="handleSaveTournament(event, '${isEdit ? tournament.id : ''}')" class="space-y-4">
+                                <div>
+                                    <label class="block text-xs font-semibold mb-1">Name des Turniers</label>
+                                    <input type="text" id="t-name" required value="${isEdit ? tournament.name : ''}" class="w-full px-4 py-2 border rounded-xl dark:bg-gray-700 text-sm">
+                                </div>
+                                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                    <div>
+                                        <label class="block text-xs font-semibold mb-1">Sportart</label>
+                                        <select id="t-sport" class="w-full px-4 py-2 border rounded-xl dark:bg-gray-700 text-sm">
+                                            <option value="Indiaca" ${currentSport === 'Indiaca' ? 'selected' : ''}>Indiaca</option>
+                                            <option value="Volleyball" ${currentSport === 'Volleyball' ? 'selected' : ''}>Volleyball</option>
+                                            <option value="Beachvolleyball" ${currentSport === 'Beachvolleyball' ? 'selected' : ''}>Beachvolleyball</option>
+                                            <option value="Sonstige" ${currentSport === 'Sonstige' ? 'selected' : ''}>Sonstige</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label class="block text-xs font-semibold mb-1">Anmeldeschluss (Datum)</label>
+                                        <input type="date" id="t-deadline" required value="${deadlineVal}" class="w-full px-4 py-2 border rounded-xl dark:bg-gray-700 text-sm">
+                                    </div>
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-semibold mb-1">Adresse / Halle</label>
+                                    <input type="text" id="t-address" value="${isEdit ? (tournament.address || '') : ''}" class="w-full px-4 py-2 border rounded-xl dark:bg-gray-700 text-sm">
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-semibold mb-1">Details / Beschreibung</label>
+                                    <textarea id="t-details" rows="3" class="w-full px-4 py-2 border rounded-xl dark:bg-gray-700 text-sm">${isEdit ? (tournament.details || '') : ''}</textarea>
+                                </div>
+                                <div class="flex items-center gap-3 pt-2">
+                                    <input type="checkbox" id="t-published" ${isEdit && tournament.is_published ? 'checked' : ''} class="w-4 h-4 text-brand-600 rounded">
+                                    <label for="t-published" class="text-xs font-semibold">Turnier veröffentlichen (für alle sichtbar)</label>
+                                </div>
+                                <button type="submit" class="w-full py-3 bg-brand-600 text-white rounded-xl shadow font-medium text-sm">Speichern</button>
+                            </form>
+                        </div>
+                    </main>
+                </div>
             `;
         }
 
         function renderProfileScreen() {
             return `
-                <header class="bg-white dark:bg-gray-800 border-b px-6 py-4 flex justify-between items-center w-full">
-                    <button onclick="goToMain()" class="text-sm font-medium">&larr; Zurück</button>
-                    <span class="font-bold text-sm">Profil bearbeiten</span>
-                    ${renderThemeToggle()}
-                </header>
-                <main class="w-full max-w-md mx-auto p-6 flex-grow">
-                    <div class="bg-white dark:bg-gray-800 rounded-2xl p-8 border shadow-sm space-y-6">
-                        <div>
-                            <label class="block text-xs font-semibold mb-1">Dein Nickname</label>
-                            <input type="text" id="profile-nickname" value="${state.currentUser.nickname || ''}" class="w-full px-4 py-2 border rounded-xl dark:bg-gray-700 text-sm">
-                        </div>
-                        <div>
-                            <label class="block text-xs font-semibold mb-2">Avatar wählen</label>
-                            <div class="grid grid-cols-3 gap-3">
-                                ${AVATARS.map((svg, idx) => `
-                                    <div onclick="selectAvatar(${idx})" id="avatar-${idx}" class="avatar-opt cursor-pointer p-3 rounded-xl border-2 ${state.currentUser.selectedAvatarIndex === idx ? 'border-brand-600 bg-brand-50' : 'border-gray-200'} flex items-center justify-center h-16">
-                                        ${svg}
-                                    </div>
-                                `).join('')}
+                <div class="space-y-6 w-full">
+                    ${renderAppHeader('Profil bearbeiten', true)}
+                    <main class="w-full max-w-md mx-auto">
+                        <div class="bg-white dark:bg-gray-800 rounded-2xl p-8 border shadow-sm space-y-6">
+                            <div class="bg-gray-50 dark:bg-gray-700/50 px-4 py-3 rounded-xl border border-gray-200 dark:border-gray-600">
+                                <span class="block text-xs text-gray-500 dark:text-gray-400">Angemeldete E-Mail-Adresse</span>
+                                <span class="font-medium text-sm text-gray-800 dark:text-gray-100 select-all">${state.currentUser.email}</span>
                             </div>
+                            <div>
+                                <label class="block text-xs font-semibold mb-1">Dein Nickname</label>
+                                <input type="text" id="profile-nickname" required value="${state.currentUser.nickname || ''}" class="w-full px-4 py-2 border rounded-xl dark:bg-gray-700 text-sm">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-semibold mb-2">Avatar wählen</label>
+                                <div class="grid grid-cols-3 gap-3">
+                                    ${AVATARS.map((svg, idx) => `
+                                        <div onclick="selectAvatar(${idx})" id="avatar-${idx}" class="avatar-opt cursor-pointer p-3 rounded-xl border-2 ${state.currentUser.selectedAvatarIndex === idx ? 'border-brand-600 bg-brand-50' : 'border-gray-200'} flex items-center justify-center h-16">
+                                            ${svg}
+                                        </div>
+                                    `).join('')}
+                                </div>
+                            </div>
+                            <button onclick="saveProfile()" class="w-full py-3 bg-brand-600 text-white rounded-xl font-medium text-sm">Speichern</button>
                         </div>
-                        <button onclick="saveProfile()" class="w-full py-3 bg-brand-600 text-white rounded-xl font-medium text-sm">Speichern</button>
-                    </div>
-                </main>
+                    </main>
+                </div>
             `;
         }
 
-        // =========================================================================
-        // PROZESSSCHRITT 4: CONTROLLER ACTIONS & AUTHENTICATION
-        // =========================================================================
-        
-        async function loginWithGoogle() {
-            await supabaseClient.auth.signInWithOAuth({ 
-                provider: 'google',
-                options: {
-                    redirectTo: window.location.origin + window.location.pathname
-                }
-            });
+        // Vereinsformular inkl. "Link zur Vereins-Homepage"
+        function renderClubFormScreen() {
+            const isEdit = state.activeClubId !== null;
+            const club = isEdit ? state.clubs.find(c => c.id === state.activeClubId) : { name: '', zip_code: '', city: '', website_url: '', logo_url: '' };
+
+            return `
+                <div class="space-y-6 w-full">
+                    ${renderAppHeader(isEdit ? 'Verein bearbeiten' : 'Neuen Verein anlegen', true)}
+                    <main class="w-full max-w-xl mx-auto">
+                        <div class="bg-white dark:bg-gray-800 rounded-2xl p-8 border shadow-sm">
+                            <form onsubmit="saveClubForm(event)" class="space-y-4">
+                                <div>
+                                    <label class="block text-xs font-semibold mb-1">Name des Vereins</label>
+                                    <input type="text" id="club-name" required value="${club.name || ''}" class="w-full px-4 py-2 border rounded-xl dark:bg-gray-700 text-sm">
+                                </div>
+                                <div class="grid grid-cols-2 gap-4">
+                                    <div>
+                                        <label class="block text-xs font-semibold mb-1">Postleitzahl</label>
+                                        <input type="text" id="club-zip" value="${club.zip_code || ''}" class="w-full px-4 py-2 border rounded-xl dark:bg-gray-700 text-sm">
+                                    </div>
+                                    <div>
+                                        <label class="block text-xs font-semibold mb-1">Ort</label>
+                                        <input type="text" id="club-city" value="${club.city || ''}" class="w-full px-4 py-2 border rounded-xl dark:bg-gray-700 text-sm">
+                                    </div>
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-semibold mb-1">Link zur Vereins-Homepage</label>
+                                    <input type="url" id="club-website" placeholder="https://www.mein-verein.de" value="${club.website_url || ''}" class="w-full px-4 py-2 border rounded-xl dark:bg-gray-700 text-sm">
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-semibold mb-1">Vereinslogo (Bilddatei hochladen oder URL eingeben)</label>
+                                    <input type="file" id="club-logo-file" accept="image/*" class="w-full text-xs text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-brand-50 file:text-brand-700 hover:file:bg-brand-100">
+                                    <input type="text" id="club-logo-url" placeholder="Oder Bild-URL direkt eingeben" value="${club.logo_url || ''}" class="w-full mt-2 px-4 py-2 border rounded-xl dark:bg-gray-700 text-xs">
+                                </div>
+                                <button type="submit" class="w-full py-3 bg-brand-600 text-white rounded-xl shadow font-medium text-sm">Verein speichern</button>
+                            </form>
+                        </div>
+                    </main>
+                </div>
+            `;
         }
 
-        function handleLoginClick() {
-            const email = document.getElementById('emailInput').value;
-            const password = document.getElementById('passwordInput').value;
-            if (!email || !password) {
-                alert("Bitte E-Mail und Passwort eingeben.");
-                return;
-            }
-            loginWithEmail(email, password);
+        function renderTeamFormScreen() {
+            const isEdit = state.activeTeamId !== null;
+            const team = isEdit ? state.teams.find(t => t.id === state.activeTeamId) : { name: '', description: '', club_id: '' };
+
+            return `
+                <div class="space-y-6 w-full">
+                    ${renderAppHeader(isEdit ? 'Team bearbeiten' : 'Neues Team anlegen', true)}
+                    <main class="w-full max-w-xl mx-auto">
+                        <div class="bg-white dark:bg-gray-800 rounded-2xl p-8 border shadow-sm">
+                            <form onsubmit="saveTeamForm(event)" class="space-y-4">
+                                <div>
+                                    <label class="block text-xs font-semibold mb-1">Name des Teams</label>
+                                    <input type="text" id="team-name" required value="${team.name || ''}" class="w-full px-4 py-2 border rounded-xl dark:bg-gray-700 text-sm">
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-semibold mb-1">Beschreibung (z.B. Herren Ü50)</label>
+                                    <input type="text" id="team-desc" value="${team.description || ''}" class="w-full px-4 py-2 border rounded-xl dark:bg-gray-700 text-sm">
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-semibold mb-1">Zugeordneter Verein</label>
+                                    <select id="team-club-id" required class="w-full px-4 py-2 border rounded-xl dark:bg-gray-700 text-sm">
+                                        <option value="">Bitte Verein wählen...</option>
+                                        ${state.clubs.map(c => `
+                                            <option value="${c.id}" ${team.club_id === c.id ? 'selected' : ''}>${c.name}</option>
+                                        `).join('')}
+                                    </select>
+                                </div>
+                                <button type="submit" class="w-full py-3 bg-brand-600 text-white rounded-xl shadow font-medium text-sm">Team speichern</button>
+                            </form>
+                        </div>
+                    </main>
+                </div>
+            `;
         }
-
-        function handleRegisterClick() {
-            const email = document.getElementById('emailInput').value;
-            const password = document.getElementById('passwordInput').value;
-            if (!email || !password) {
-                alert("Bitte E-Mail und Passwort eingeben.");
-                return;
-            }
-            registerWithEmail(email, password);
-        }
-
-        async function registerWithEmail(email, password) {
-            const { data, error } = await supabaseClient.auth.signUp({
-                email: email,
-                password: password,
-                options: {
-                    emailRedirectTo: window.location.origin + window.location.pathname
-                }
-            });
-
-            if (error) {
-                alert("Registrierung fehlgeschlagen: " + error.message);
-                return;
-            }
-            alert("Registrierung erfolgreich! Bitte logge dich ein.");
-            return data;
-        }
-
-        async function loginWithEmail(email, password) {
-            const { data, error } = await supabaseClient.auth.signInWithPassword({
-                email: email,
-                password: password
-            });
-
-            if (error) {
-                alert("Login fehlgeschlagen: " + error.message);
-                return;
-            }
-            await initApp();
-        }
-
-        async function logout() {
-            await supabaseClient.auth.signOut();
-            state.currentUser = null;
-            state.currentScreen = 'auth';
-            render();
-        }
-
-        function goToMain() { state.currentScreen = 'main'; render(); }
-        function goToCreateTournament() { state.currentScreen = 'create-tournament'; render(); }
-        function goToProfile() { state.currentScreen = 'profile'; render(); }
-        function openTournament(id) { state.activeTournamentId = id; state.currentScreen = 'detail-tournament'; render(); }
-
-        function selectAvatar(idx) {
-            document.querySelectorAll('.avatar-opt').forEach(el => el.classList.remove('border-brand-600', 'bg-brand-50'));
-            document.getElementById(`avatar-${idx}`).classList.add('border-brand-600', 'bg-brand-50');
-            state.currentUser.tempAvatarIndex = idx;
-        }
-
-        async function saveProfile() {
-            const newNickname = document.getElementById('profile-nickname').value;
-            const updateData = { nickname: newNickname };
-
-            if (state.currentUser.tempAvatarIndex !== undefined) {
-                const idx = state.currentUser.tempAvatarIndex;
-                updateData.avatar_index = idx;
-                state.currentUser.selectedAvatarIndex = idx;
-                state.currentUser.avatar = AVATARS[idx];
-            }
-
-            await supabaseClient.from('profiles').update(updateData).eq('id', state.currentUser.id);
-            state.currentUser.nickname = newNickname;
-            goToMain();
-        }
-
-        async function handleSaveTournament(e, id) {
-            e.preventDefault();
-            const name = document.getElementById('t-name').value;
-            const sport_type = document.getElementById('t-sport').value;
-            const address = document.getElementById('t-address').value;
-            const details = document.getElementById('t-details').value;
-            const is_published = document.getElementById('t-published').checked;
-
-            if (id) {
-                await supabaseClient.from('tournaments').update({ name, sport_type, address, details, is_published }).eq('id', id);
-            } else {
-                await supabaseClient.from('tournaments').insert([{ 
-                    name, sport_type, address, details, is_published, created_by: state.currentUser.id, admins: [state.currentUser.email] 
-                }]);
-            }
-            await loadTournaments();
-            goToMain();
-        }
-
-        function openModal(type) {
-            document.getElementById('modal-container').classList.remove('hidden');
-            document.getElementById('modal-content').innerHTML = type === 'privacy' ? '<h3>Datenschutz</h3>' : '<h3>Impressum</h3>';
-        }
-    
-        function closeModal() { document.getElementById('modal-container').classList.add('hidden'); }
-
-        // =========================================================================
-        // PROZESSSCHRITT 5: VEREINE & TEAMS WORKFLOW
-        // =========================================================================
-
-        function goToClubsAndTeams() { state.currentScreen = 'clubs-teams'; state.clubsTab = 'mine'; render(); }
-        function setClubsTab(tab) { state.clubsTab = tab; render(); }
 
         function renderClubsAndTeamsScreen() {
-            const myClubs = state.clubs.filter(c => 
-                (c.managers && c.managers.includes(state.currentUser.email)) || 
+            const myClubs = state.clubs.filter(c =>
+                (c.managers && c.managers.includes(state.currentUser.email)) ||
                 (c.members && c.members.includes(state.currentUser.email))
             );
-            const myTeams = state.teams.filter(t => 
-                (t.coaches && t.coaches.includes(state.currentUser.email)) || 
+            const myTeams = state.teams.filter(t =>
+                (t.coaches && t.coaches.includes(state.currentUser.email)) ||
                 (t.members && t.members.includes(state.currentUser.email))
             );
 
-            const publishedClubs = state.clubs.filter(c => c.is_published === true);
-
             return `
-                <header class="bg-white dark:bg-gray-800 border-b px-6 py-4 flex justify-between items-center w-full">
-                    <button onclick="goToMain()" class="text-sm font-medium">&larr; Zurück zum Hauptmenü</button>
-                    <span class="font-bold text-sm">Vereine & Teams</span>
-                    <div class="flex items-center gap-3">
-                        ${renderThemeToggle()}
-                        <div class="w-8 h-8 rounded-full bg-gray-100 dark:bg-gray-700 overflow-hidden border flex items-center justify-center">
-                            ${state.currentUser.avatar}
-                        </div>
-                        <span class="text-sm font-semibold">${state.currentUser.nickname}</span>
-                        <button onclick="logout()" class="ml-2 px-3 py-1.5 text-xs bg-red-50 hover:bg-red-100 text-red-600 rounded-xl font-medium transition">Abmelden</button>
-                    </div>
-                </header>
-                <main class="w-full max-w-4xl mx-auto p-6 flex-grow space-y-8">
-                    
-                    <div class="flex border-b border-gray-200 dark:border-gray-700 pb-3 gap-4">
-                        <button onclick="setClubsTab('mine')" class="px-4 py-2 text-sm font-semibold rounded-xl transition ${state.clubsTab === 'mine' ? 'bg-brand-600 text-white shadow' : 'bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300'}">Meine Vereine & Teams</button>
-                        <button onclick="setClubsTab('explore')" class="px-4 py-2 text-sm font-semibold rounded-xl transition ${state.clubsTab === 'explore' ? 'bg-brand-600 text-white shadow' : 'bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300'}">Vereine entdecken</button>
-                    </div>
-
-                    ${state.clubsTab === 'mine' ? `
+                <div class="space-y-6 w-full">
+                    ${renderAppHeader('Vereine & Teams verwalten', true)}
+                    <main class="w-full max-w-4xl mx-auto space-y-8">
                         <section class="space-y-4">
                             <div class="flex justify-between items-center">
                                 <h2 class="text-xl font-bold">Deine Vereine</h2>
@@ -624,25 +711,44 @@
                                 ${myClubs.map(c => {
                                     const isManager = c.managers && c.managers.includes(state.currentUser.email);
                                     const pendingMembers = c.pending_members || [];
-                                    const members = c.members || [];
                                     return `
-                                        <div class="bg-white dark:bg-gray-800 p-4 rounded-xl border dark:border-gray-700 flex items-center justify-between gap-4">
-                                            <div class="flex items-center gap-3">
-                                                ${c.logo_url ? `<img src="${c.logo_url}" class="w-12 h-12 object-cover rounded-xl border">` : `<div class="w-12 h-12 rounded-xl bg-gray-100 dark:bg-gray-700 flex items-center justify-center text-xs font-bold text-gray-400">LOGO</div>`}
-                                                <div>
-                                                    <h3 class="font-bold text-sm">${c.name} <span class="text-xs font-normal px-2 py-0.5 rounded ${c.is_published ? 'bg-emerald-100 text-emerald-800' : 'bg-gray-100 text-gray-600'}">${c.is_published ? 'Publiziert' : 'Entwurf'}</span></h3>
-                                                    <p class="text-xs text-gray-500">📍 ${c.zip_code || ''} ${c.city || ''}</p>
-                                                    <p class="text-[10px] text-brand-600 mt-0.5">Manager: ${c.managers.map(m => getNickname(m)).join(', ')}</p>
+                                        <div class="bg-white dark:bg-gray-800 p-4 rounded-xl border dark:border-gray-700 space-y-3">
+                                            <div class="flex flex-wrap items-center justify-between gap-4">
+                                                <div class="flex items-center gap-3">
+                                                    ${c.logo_url
+                                                        ? `<img src="${c.logo_url}" class="w-12 h-12 object-cover rounded-xl border">`
+                                                        : `<div class="w-12 h-12 rounded-xl bg-gray-100 dark:bg-gray-700 flex items-center justify-center text-xs font-bold text-gray-400">LOGO</div>`
+                                                    }
+                                                    <div>
+                                                        <h3 class="font-bold text-sm">${c.name} <span class="text-xs font-normal px-2 py-0.5 rounded ${c.is_published ? 'bg-emerald-100 text-emerald-800' : 'bg-gray-100 text-gray-600'}">${c.is_published ? 'Publiziert' : 'Entwurf'}</span></h3>
+                                                        <p class="text-xs text-gray-500">📍 ${c.zip_code || ''} ${c.city || ''}</p>
+                                                        ${c.website_url ? `<p class="text-xs"><a href="${c.website_url}" target="_blank" rel="noopener noreferrer" class="text-brand-600 hover:underline">${c.website_url}</a></p>` : ''}
+                                                        <p class="text-[11px] text-brand-600 mt-0.5">Manager: ${(c.managers || []).map(m => getNickname(m)).join(', ')}</p>
+                                                        <p class="text-[11px] text-gray-500">Mitglieder: ${(c.members || []).map(m => getNickname(m)).join(', ') || 'Keine'}</p>
+                                                    </div>
+                                                </div>
+                                                <div class="flex flex-wrap items-center gap-2">
+                                                    ${isManager ? `
+                                                        <button onclick="toggleClubPublish('${c.id}', ${!c.is_published})" class="text-xs px-2.5 py-1.5 bg-gray-100 dark:bg-gray-700 rounded-lg">${c.is_published ? 'Verstecken' : 'Publizieren'}</button>
+                                                        <button onclick="openClubForm('${c.id}')" class="text-xs px-2.5 py-1.5 bg-gray-100 dark:bg-gray-700 rounded-lg">Bearbeiten</button>
+                                                        <button onclick="handleDeleteClub('${c.id}')" class="text-xs px-2.5 py-1.5 bg-red-50 text-red-600 rounded-lg">Löschen</button>
+                                                        <button onclick="handleAddManagerPrompt('${c.id}')" class="text-xs px-2.5 py-1.5 bg-brand-50 text-brand-600 rounded-lg">+ Manager</button>
+                                                    ` : ''}
                                                 </div>
                                             </div>
-                                            <div class="flex items-center gap-2">
-                                                ${isManager ? `
-                                                    <button onclick="toggleClubPublish('${c.id}', ${!c.is_published})" class="text-xs px-2.5 py-1.5 bg-gray-100 dark:bg-gray-700 rounded-lg">${c.is_published ? 'Verstecken' : 'Publizieren'}</button>
-                                                    <button onclick="openClubForm('${c.id}')" class="text-xs px-2.5 py-1.5 bg-gray-100 dark:bg-gray-700 rounded-lg">Bearbeiten</button>
-                                                    <button onclick="handleDeleteClub('${c.id}')" class="text-xs px-2.5 py-1.5 bg-red-50 text-red-600 rounded-lg">Löschen</button>
-                                                    <button onclick="handleAddManagerPrompt('${c.id}')" class="text-xs px-2.5 py-1.5 bg-brand-50 text-brand-600 rounded-lg">+ Manager</button>
-                                                ` : ''}
-                                            </div>
+                                            ${isManager && pendingMembers.length > 0 ? `
+                                                <div class="bg-amber-50 dark:bg-amber-900/20 p-3 rounded-lg border border-amber-200 dark:border-amber-800 space-y-2">
+                                                    <p class="text-xs font-bold text-amber-800 dark:text-amber-300">Offene Beitrittsanfragen (${pendingMembers.length}):</p>
+                                                    <div class="flex flex-wrap gap-2">
+                                                        ${pendingMembers.map(email => `
+                                                            <div class="flex items-center gap-2 bg-white dark:bg-gray-800 px-3 py-1 rounded-lg border text-xs">
+                                                                <span>${getNickname(email)}</span>
+                                                                <button onclick="acceptClubMember('${c.id}', '${email}')" class="bg-emerald-600 text-white px-2 py-0.5 rounded">Annehmen</button>
+                                                            </div>
+                                                        `).join('')}
+                                                    </div>
+                                                </div>
+                                            ` : ''}
                                         </div>
                                     `;
                                 }).join('')}
@@ -659,66 +765,159 @@
                                 ${myTeams.map(t => {
                                     const isCoach = t.coaches && t.coaches.includes(state.currentUser.email);
                                     const assignedClub = state.clubs.find(c => c.id === t.club_id);
+                                    const pendingTeamMembers = t.pending_members || [];
                                     return `
-                                        <div class="bg-white dark:bg-gray-800 p-4 rounded-xl border dark:border-gray-700 flex justify-between items-center">
-                                            <div>
-                                                <h3 class="font-bold text-sm">${t.name} <span class="text-xs font-normal text-gray-500">(${t.description || 'Keine Beschreibung'})</span></h3>
-                                                <p class="text-xs text-brand-600 font-medium">Verein: ${assignedClub ? assignedClub.name : 'Kein Verein zugeordnet'}</p>
-                                                <p class="text-[10px] text-emerald-600">Coach: ${(t.coaches || []).map(c => getNickname(c)).join(', ')}</p>
-                                            </div>
-                                            <div class="flex items-center gap-1">
-                                                ${isCoach ? `
-                                                    <button onclick="openTeamForm('${t.id}')" class="text-xs px-2 py-1 bg-gray-100 dark:bg-gray-700 rounded">Bearbeiten</button>
-                                                    <button onclick="handleDeleteTeam('${t.id}')" class="text-xs px-2 py-1 bg-red-50 text-red-600 rounded">Löschen</button>
-                                                ` : ''}
-                                            </div>
-                                        </div>
-                                    `;
-                                }).join('')}
-                            </div>
-                        </section>
-                    ` : `
-                        <section class="space-y-4">
-                            <h2 class="text-xl font-bold">Öffentliche Vereine entdecken</h2>
-                            <div class="grid gap-4">
-                                ${publishedClubs.length === 0 ? '<p class="text-xs text-gray-500">Derzeit sind keine publizierten Vereine verfügbar.</p>' : ''}
-                                ${publishedClubs.map(c => {
-                                    const isMember = c.members && c.members.includes(state.currentUser.email);
-                                    const isManager = c.managers && c.managers.includes(state.currentUser.email);
-                                    const isPending = c.pending_members && c.pending_members.includes(state.currentUser.email);
-                                    const clubTeams = state.teams.filter(t => t.club_id === c.id);
-
-                                    return `
-                                        <div class="bg-white dark:bg-gray-800 p-5 rounded-xl border dark:border-gray-700 space-y-4 shadow-sm flex items-start justify-between">
-                                            <div class="flex items-start gap-4">
-                                                ${c.logo_url ? `<img src="${c.logo_url}" class="w-16 h-16 object-cover rounded-2xl border">` : `<div class="w-16 h-16 rounded-2xl bg-gray-100 dark:bg-gray-700 flex items-center justify-center text-xs font-bold text-gray-400">LOGO</div>`}
+                                        <div class="bg-white dark:bg-gray-800 p-4 rounded-xl border dark:border-gray-700 space-y-3">
+                                            <div class="flex flex-wrap justify-between items-center gap-3">
                                                 <div>
-                                                    <h3 class="font-bold text-base">${c.name}</h3>
-                                                    <p class="text-xs text-gray-500">📍 ${c.zip_code || ''} ${c.city || ''}</p>
-                                                    <p class="text-xs text-brand-600 mt-1">Manager: ${c.managers.map(m => getNickname(m)).join(', ')}</p>
+                                                    <h3 class="font-bold text-sm">${t.name} <span class="text-xs font-normal text-gray-500">(${t.description || 'Keine Beschreibung'})</span></h3>
+                                                    <p class="text-xs text-brand-600 font-medium">Verein: ${assignedClub ? assignedClub.name : 'Kein Verein zugeordnet'}</p>
+                                                    <p class="text-[11px] text-emerald-600">Coach: ${(t.coaches || []).map(c => getNickname(c)).join(', ')}</p>
+                                                    <p class="text-[11px] text-gray-500">Mitglieder: ${(t.members || []).map(m => getNickname(m)).join(', ') || 'Keine'}</p>
+                                                </div>
+                                                <div class="flex items-center gap-1">
+                                                    ${isCoach ? `
+                                                        <button onclick="openTeamForm('${t.id}')" class="text-xs px-2 py-1 bg-gray-100 dark:bg-gray-700 rounded">Bearbeiten</button>
+                                                        <button onclick="handleDeleteTeam('${t.id}')" class="text-xs px-2 py-1 bg-red-50 text-red-600 rounded">Löschen</button>
+                                                    ` : ''}
                                                 </div>
                                             </div>
-                                            <div>
-                                                ${isManager || isMember ? `
-                                                    <span class="text-xs bg-emerald-100 text-emerald-800 px-3 py-1 rounded-full font-medium">Mitglied</span>
-                                                ` : isPending ? `
-                                                    <span class="text-xs bg-amber-100 text-amber-800 px-3 py-1 rounded-full font-medium">Anfrage ausstehend</span>
-                                                ` : `
-                                                    <button onclick="requestClubJoin('${c.id}')" class="text-xs px-3 py-1.5 bg-brand-600 text-white rounded-xl shadow font-medium">Beitritt anfragen</button>
-                                                `}
-                                            </div>
+                                            ${isCoach && pendingTeamMembers.length > 0 ? `
+                                                <div class="bg-amber-50 dark:bg-amber-900/20 p-3 rounded-lg border border-amber-200 dark:border-amber-800 space-y-2">
+                                                    <p class="text-xs font-bold text-amber-800 dark:text-amber-300">Offene Team-Anfragen (${pendingTeamMembers.length}):</p>
+                                                    <div class="flex flex-wrap gap-2">
+                                                        ${pendingTeamMembers.map(email => `
+                                                            <div class="flex items-center gap-2 bg-white dark:bg-gray-800 px-3 py-1 rounded-lg border text-xs">
+                                                                <span>${getNickname(email)}</span>
+                                                                <button onclick="acceptTeamMember('${t.id}', '${email}')" class="bg-emerald-600 text-white px-2 py-0.5 rounded">Annehmen</button>
+                                                            </div>
+                                                        `).join('')}
+                                                    </div>
+                                                </div>
+                                            ` : ''}
                                         </div>
                                     `;
                                 }).join('')}
                             </div>
                         </section>
-                    `}
-
-                </main>
+                    </main>
+                </div>
             `;
         }
 
-        // Navigation zu den Editier-Formularen
+        // =====================================================================
+        // PROZESSSCHRITT 6: CONTROLLER-AKTIONEN, AUTH & DATENBANK-SCHREIBLOGIK
+        // =====================================================================
+        async function loginWithGoogle() {
+            await supabaseClient.auth.signInWithOAuth({
+                provider: 'google',
+                options: { redirectTo: window.location.origin + window.location.pathname }
+            });
+        }
+
+        function handleLoginClick() {
+            const email = document.getElementById('emailInput').value;
+            const password = document.getElementById('passwordInput').value;
+            if (!email || !password) return alert("Bitte E-Mail und Passwort eingeben.");
+            loginWithEmail(email, password);
+        }
+
+        function handleRegisterClick() {
+            const email = document.getElementById('emailInput').value;
+            const password = document.getElementById('passwordInput').value;
+            if (!email || !password) return alert("Bitte E-Mail und Passwort eingeben.");
+            registerWithEmail(email, password);
+        }
+
+        async function registerWithEmail(email, password) {
+            const { data, error } = await supabaseClient.auth.signUp({
+                email, password,
+                options: { emailRedirectTo: window.location.origin + window.location.pathname }
+            });
+            if (error) return alert("Registrierung fehlgeschlagen: " + error.message);
+            alert("Registrierung erfolgreich! Bitte logge dich ein.");
+            return data;
+        }
+
+        async function loginWithEmail(email, password) {
+            const { error } = await supabaseClient.auth.signInWithPassword({ email, password });
+            if (error) return alert("Login fehlgeschlagen: " + error.message);
+            await initApp();
+        }
+
+        async function logout() {
+            await supabaseClient.auth.signOut();
+            state.currentUser = null;
+            state.currentScreen = 'auth';
+            render();
+        }
+
+        function goToMain() { state.currentScreen = 'main'; render(); }
+        function goToTournaments() { state.currentScreen = 'tournaments'; render(); }
+        function goToCreateTournament() {
+            if (!canCreateTournament()) return alert("Nur ClubManager oder TeamCoach dürfen Turniere anlegen.");
+            state.currentScreen = 'create-tournament';
+            render();
+        }
+        function goToProfile() { state.currentScreen = 'profile'; render(); }
+        function goToClubsAndTeams() { state.currentScreen = 'clubs-teams'; render(); }
+        function openTournament(id) { state.activeTournamentId = id; state.currentScreen = 'detail-tournament'; render(); }
+
+        function selectAvatar(idx) {
+            document.querySelectorAll('.avatar-opt').forEach(el => el.classList.remove('border-brand-600', 'bg-brand-50'));
+            document.getElementById(`avatar-${idx}`).classList.add('border-brand-600', 'bg-brand-50');
+            state.currentUser.tempAvatarIndex = idx;
+        }
+
+        // Bugfix: Nickname-Änderung auch in state.profiles nachführen
+        async function saveProfile() {
+            const newNickname = document.getElementById('profile-nickname').value.trim();
+            if (!newNickname) return alert("Bitte einen Nickname eingeben.");
+            const updateData = { nickname: newNickname };
+
+            if (state.currentUser.tempAvatarIndex !== undefined) {
+                const idx = state.currentUser.tempAvatarIndex;
+                updateData.avatar_index = idx;
+                state.currentUser.selectedAvatarIndex = idx;
+                state.currentUser.avatar = AVATARS[idx];
+            }
+
+            const { error } = await supabaseClient.from('profiles').update(updateData).eq('id', state.currentUser.id);
+            if (error) return alert("Fehler beim Speichern des Profils: " + error.message);
+
+            state.currentUser.nickname = newNickname;
+            const existingProfile = state.profiles.find(p => p.email === state.currentUser.email || p.id === state.currentUser.id);
+            if (existingProfile) {
+                existingProfile.nickname = newNickname;
+                if (updateData.avatar_index !== undefined) existingProfile.avatar_index = updateData.avatar_index;
+            }
+            goToMain();
+        }
+
+        async function handleSaveTournament(e, id) {
+            e.preventDefault();
+            if (!canCreateTournament()) return alert("Nur ClubManager oder TeamCoach dürfen Turniere speichern.");
+
+            const name = document.getElementById('t-name').value;
+            const sport_type = document.getElementById('t-sport').value;
+            const registration_deadline = document.getElementById('t-deadline').value;
+            const address = document.getElementById('t-address').value;
+            const details = document.getElementById('t-details').value;
+            const is_published = document.getElementById('t-published').checked;
+
+            if (id) {
+                await supabaseClient.from('tournaments').update({ name, sport_type, registration_deadline, address, details, is_published }).eq('id', id);
+            } else {
+                await supabaseClient.from('tournaments').insert([{
+                    name, sport_type, registration_deadline, address, details, is_published,
+                    created_by: state.currentUser.id,
+                    admins: [state.currentUser.email]
+                }]);
+            }
+            await loadTournaments();
+            goToTournaments();
+        }
+
         function openClubForm(clubId) {
             state.activeClubId = clubId;
             state.currentScreen = 'edit-club';
@@ -726,29 +925,25 @@
         }
 
         function openTeamForm(teamId) {
-            if (!teamId && state.clubs.length === 0) {
-                alert("Du musst zuerst einen Verein anlegen!");
-                return;
-            }
+            if (!teamId && state.clubs.length === 0) return alert("Du musst zuerst einen Verein anlegen!");
             state.activeTeamId = teamId;
             state.currentScreen = 'edit-team';
             render();
         }
 
-        // Speichern-Logik für Verein (inkl. Logo-Verarbeitung)
         async function saveClubForm(e) {
             e.preventDefault();
             const name = document.getElementById('club-name').value;
             const zip_code = document.getElementById('club-zip').value;
             const city = document.getElementById('club-city').value;
+            const website_url = document.getElementById('club-website').value;
             let logo_url = document.getElementById('club-logo-url').value;
 
             const fileInput = document.getElementById('club-logo-file');
             if (fileInput.files && fileInput.files[0]) {
                 const file = fileInput.files[0];
                 const fileName = `logo_${Date.now()}_${file.name}`;
-                // Upload in Supabase Storage (Bucket: 'club-logos')
-                const { data, error } = await supabaseClient.storage.from('club-logos').upload(fileName, file);
+                const { error } = await supabaseClient.storage.from('club-logos').upload(fileName, file);
                 if (!error) {
                     const { data: publicUrlData } = supabaseClient.storage.from('club-logos').getPublicUrl(fileName);
                     logo_url = publicUrlData.publicUrl;
@@ -756,10 +951,10 @@
             }
 
             if (state.activeClubId) {
-                await supabaseClient.from('clubs').update({ name, zip_code, city, logo_url }).eq('id', state.activeClubId);
+                await supabaseClient.from('clubs').update({ name, zip_code, city, website_url, logo_url }).eq('id', state.activeClubId);
             } else {
                 await supabaseClient.from('clubs').insert([{
-                    name, zip_code, city, logo_url,
+                    name, zip_code, city, website_url, logo_url,
                     created_by: state.currentUser.id,
                     managers: [state.currentUser.email],
                     members: []
@@ -770,7 +965,6 @@
             goToClubsAndTeams();
         }
 
-        // Speichern-Logik für Team
         async function saveTeamForm(e) {
             e.preventDefault();
             const name = document.getElementById('team-name').value;
@@ -816,6 +1010,36 @@
             render();
         }
 
+        async function acceptClubMember(clubId, email) {
+            const club = state.clubs.find(c => c.id === clubId);
+            if (!club) return;
+            const pending = (club.pending_members || []).filter(e => e !== email);
+            const members = [...new Set([...(club.members || []), email])];
+            await supabaseClient.from('clubs').update({ pending_members: pending, members }).eq('id', clubId);
+            await loadClubsAndTeams();
+            render();
+        }
+
+        async function requestTeamJoin(teamId) {
+            const team = state.teams.find(t => t.id === teamId);
+            if (!team) return;
+            const pending = [...new Set([...(team.pending_members || []), state.currentUser.email])];
+            await supabaseClient.from('teams').update({ pending_members: pending }).eq('id', teamId);
+            alert("Team-Beitrittsanfrage gesendet!");
+            await loadClubsAndTeams();
+            render();
+        }
+
+        async function acceptTeamMember(teamId, email) {
+            const team = state.teams.find(t => t.id === teamId);
+            if (!team) return;
+            const pending = (team.pending_members || []).filter(e => e !== email);
+            const members = [...new Set([...(team.members || []), email])];
+            await supabaseClient.from('teams').update({ pending_members: pending, members }).eq('id', teamId);
+            await loadClubsAndTeams();
+            render();
+        }
+
         async function toggleClubPublish(clubId, targetState) {
             await supabaseClient.from('clubs').update({ is_published: targetState }).eq('id', clubId);
             await loadClubsAndTeams();
@@ -826,11 +1050,19 @@
             const newEmail = prompt("E-Mail-Adresse des neuen Vereinsmanagers:");
             if (!newEmail) return;
             const club = state.clubs.find(c => c.id === clubId);
+            if (!club) return;
             const updatedManagers = [...new Set([...(club.managers || []), newEmail])];
             await supabaseClient.from('clubs').update({ managers: updatedManagers }).eq('id', clubId);
             await loadClubsAndTeams();
             render();
         }
+
+        function openModal(type) {
+            document.getElementById('modal-container').classList.remove('hidden');
+            document.getElementById('modal-content').innerHTML = type === 'privacy' ? '<h3>Datenschutz</h3>' : '<h3>Impressum</h3>';
+        }
+
+        function closeModal() { document.getElementById('modal-container').classList.add('hidden'); }
 
         window.addEventListener('DOMContentLoaded', initApp);
     </script>
