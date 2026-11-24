@@ -931,34 +931,71 @@
             render();
         }
 
+        // =====================================================================
+        // PROZESSSCHRITT 6.1: VEREIN SPEICHERN INKL. LOGO-UPLOAD & FEHLERPRÜFUNG
+        // =====================================================================
         async function saveClubForm(e) {
             e.preventDefault();
-            const name = document.getElementById('club-name').value;
-            const zip_code = document.getElementById('club-zip').value;
-            const city = document.getElementById('club-city').value;
-            const website_url = document.getElementById('club-website').value;
-            let logo_url = document.getElementById('club-logo-url').value;
+            const name = document.getElementById('club-name').value.trim();
+            const zip_code = document.getElementById('club-zip').value.trim();
+            const city = document.getElementById('club-city').value.trim();
+            const website_url = document.getElementById('club-website').value.trim();
+            let logo_url = document.getElementById('club-logo-url').value.trim();
 
             const fileInput = document.getElementById('club-logo-file');
             if (fileInput.files && fileInput.files[0]) {
                 const file = fileInput.files[0];
-                const fileName = `logo_${Date.now()}_${file.name}`;
-                const { error } = await supabaseClient.storage.from('club-logos').upload(fileName, file);
-                if (!error) {
-                    const { data: publicUrlData } = supabaseClient.storage.from('club-logos').getPublicUrl(fileName);
-                    logo_url = publicUrlData.publicUrl;
+                // Dateiendung extrahieren und sicheren Dateinamen ohne Leerzeichen/Sonderzeichen bauen
+                const fileExt = (file.name.split('.').pop() || 'png').toLowerCase().replace(/[^a-z0-9]/g, '');
+                const fileName = `logo_${Date.now()}.${fileExt}`;
+
+                // Datei in Supabase Storage hochladen
+                const { error: uploadError } = await supabaseClient.storage
+                    .from('club-logos')
+                    .upload(fileName, file, {
+                        cacheControl: '3600',
+                        upsert: true,
+                        contentType: file.type || 'image/png'
+                    });
+
+                if (uploadError) {
+                    console.error("Storage Upload Fehler:", uploadError);
+                    alert("Logo-Upload fehlgeschlagen: " + uploadError.message);
+                    return; // Abbruch, damit der Fehler nicht verschluckt wird
                 }
+
+                // Öffentliche URL des hochgeladenen Logos abrufen
+                const { data: publicUrlData } = supabaseClient.storage
+                    .from('club-logos')
+                    .getPublicUrl(fileName);
+
+                logo_url = publicUrlData.publicUrl;
             }
 
+            // Vereinsdaten in der Tabelle 'clubs' aktualisieren oder neu anlegen
+            let dbError = null;
             if (state.activeClubId) {
-                await supabaseClient.from('clubs').update({ name, zip_code, city, website_url, logo_url }).eq('id', state.activeClubId);
+                const { error } = await supabaseClient
+                    .from('clubs')
+                    .update({ name, zip_code, city, website_url, logo_url })
+                    .eq('id', state.activeClubId);
+                dbError = error;
             } else {
-                await supabaseClient.from('clubs').insert([{
-                    name, zip_code, city, website_url, logo_url,
-                    created_by: state.currentUser.id,
-                    managers: [state.currentUser.email],
-                    members: []
-                }]);
+                const { error } = await supabaseClient
+                    .from('clubs')
+                    .insert([{
+                        name, zip_code, city, website_url, logo_url,
+                        created_by: state.currentUser.id,
+                        managers: [state.currentUser.email],
+                        members: []
+                    }]);
+                dbError = error;
+            }
+
+            if (dbError) {
+                console.error("Datenbank Fehler beim Speichern des Vereins:", dbError);
+                alert("Verein konnte nicht gespeichert werden: " + dbError.message);
+                return;
             }
 
             await loadClubsAndTeams();
